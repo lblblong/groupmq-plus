@@ -31,10 +31,6 @@
   "engines": {
     "node": ">=18"
   },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
   "scripts": {
     "build": "tsdown src/index.ts --format esm --format cjs --dts --sourcemap && node scripts/copy-lua.mjs",
     "prebuild": "pnpm test:lua",
