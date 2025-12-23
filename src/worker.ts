@@ -4,7 +4,15 @@ import { Logger, type LoggerInterface } from './logger';
 import type { AddOptions, Queue, ReservedJob } from './queue';
 import { DispatchStrategy } from './strategies/dispatch-strategy';
 
-export type BackoffStrategy = (attempt: number) => number; // ms
+// Error type that marks a job as unrecoverable and skips retries
+export class UnrecoverableError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UnrecoverableError';
+  }
+}
+
+export type BackoffStrategy = (attempt: number, error: unknown) => number; // ms
 
 // Typed event system for Worker
 export interface WorkerEvents<T = any>
@@ -134,9 +142,11 @@ export type WorkerOptions<T> = {
 
   /**
    * Backoff strategy for retrying failed jobs. Determines delay between retries.
+    * Receives the error object to allow smarter strategies.
    *
    * @default Exponential backoff with jitter (500ms, 1s, 2s, 4s, 8s, 16s, 30s max)
-   * @example (attempt) => Math.min(10000, attempt * 1000) // Linear backoff
+    * @example (attempt, err) =>
+    *   err instanceof RateLimitError ? err.retryAfterMs : Math.min(10000, attempt * 1000)
    *
    * **When to adjust:**
    * - Rate-limited APIs: Use longer delays
@@ -298,7 +308,7 @@ export type WorkerOptions<T> = {
   strategyPollInterval?: number;
 };
 
-const defaultBackoff: BackoffStrategy = (attempt) => {
+const defaultBackoff: BackoffStrategy = (attempt, _error) => {
   const base = Math.min(30_000, 2 ** (attempt - 1) * 500);
   const jitter = Math.floor(base * 0.25 * Math.random());
   return base + jitter;
@@ -1349,7 +1359,23 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
     // Calculate next attempt and backoff
     const nextAttempt = job.attempts + 1;
-    const backoffMs = this.backoff(nextAttempt);
+    if (err instanceof UnrecoverableError) {
+      this.logger.info(
+        `Unrecoverable error for job ${job.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }. Skipping retries.`,
+      );
+      await this.deadLetterJob(
+        err,
+        job,
+        jobStartWallTime,
+        failedAt,
+        nextAttempt,
+      );
+      return;
+    }
+
+    const backoffMs = this.backoff(nextAttempt, err);
 
     // Check if we should dead-letter (max attempts reached)
     if (nextAttempt >= this.maxAttempts) {

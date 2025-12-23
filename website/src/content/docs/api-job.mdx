@@ -52,6 +52,14 @@ Retry this job using queue defaults and backoff.
 await job.retry()
 ```
 
+### waitUntilFinished(timeoutMs?)
+
+Wait for this job to finish (completed or failed). Resolves with return value or rejects with failure reason. Optional timeout in ms (0 = no timeout).
+
+```ts
+const result = await job.waitUntilFinished(10_000)
+```
+
 ### getState()
 
 Get the current status inferred from Redis.

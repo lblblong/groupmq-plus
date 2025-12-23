@@ -310,6 +310,14 @@ Wait until there are no active, waiting, or delayed jobs, or until timeout.
 const drained = await queue.waitForEmpty(60_000)
 ```
 
+### waitUntilFinished(jobId, timeoutMs?)
+
+Wait for a specific job to complete or fail. Resolves with the job's return value or rejects with its failure reason. Optional timeout in ms (0 = no timeout).
+
+```ts
+const result = await queue.waitUntilFinished(job.id, 10_000)
+```
+
 ### heartbeat(job, extendMs?)
 
 Extend a job's visibility/lock. Usually handled by the worker heartbeat.

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
+import { Queue, Worker, UnrecoverableError } from '../src';
 import { createRedis } from './helpers/redis';
 
 describe('Retry Behavior Tests', () => {
@@ -270,6 +270,95 @@ describe('Retry Behavior Tests', () => {
 
     expect(groupAOrder).toEqual(['A1', 'A2']);
     expect(groupBOrder).toEqual(['B1', 'B2']);
+
+    await worker.close();
+    await redis.quit();
+  });
+
+  it('should immediately fail when UnrecoverableError is thrown', async () => {
+    const redis = createRedis();
+    const q = new Queue({
+      redis,
+      namespace: `${namespace}:unrecoverable`,
+      maxAttempts: 5,
+      keepFailed: 1,
+    });
+
+    await q.add({
+      groupId: 'fatal-group',
+      data: { fatal: true },
+    });
+
+    let attemptCount = 0;
+    const worker = new Worker({
+      queue: q,
+      blockingTimeoutSec: 1,
+      handler: async () => {
+        attemptCount++;
+        throw new UnrecoverableError('This job is broken');
+      },
+    });
+
+    worker.run();
+
+    await q.waitForEmpty();
+
+    expect(attemptCount).toBe(1);
+
+    const failedJobs = await q.getFailed();
+    expect(failedJobs.length).toBe(1);
+    expect(failedJobs[0].failedReason).toBe('This job is broken');
+
+    await worker.close();
+    await redis.quit();
+  });
+
+  it('should support smart backoff based on error type', async () => {
+    const redis = createRedis();
+    const q = new Queue({ redis, namespace: `${namespace}:smart-backoff` });
+
+    class RateLimitError extends Error {
+      retryAfterMs: number;
+      constructor(retryAfterMs: number) {
+        super('Rate Limited');
+        this.retryAfterMs = retryAfterMs;
+      }
+    }
+
+    await q.add({
+      groupId: 'smart-group',
+      data: { type: 'rate-limit' },
+      maxAttempts: 2,
+    });
+
+    const attemptTimestamps: number[] = [];
+
+    const worker = new Worker({
+      queue: q,
+      blockingTimeoutSec: 1,
+      backoff: (attempt, err) => {
+        if (err instanceof RateLimitError) {
+          return err.retryAfterMs;
+        }
+        return 100;
+      },
+      handler: async () => {
+        attemptTimestamps.push(Date.now());
+        if (attemptTimestamps.length === 1) {
+          throw new RateLimitError(500);
+        }
+        return 'success';
+      },
+    });
+
+    worker.run();
+
+    await q.waitForEmpty();
+
+    expect(attemptTimestamps.length).toBe(2);
+    const delay = attemptTimestamps[1] - attemptTimestamps[0];
+    expect(delay).toBeGreaterThanOrEqual(450);
+    expect(delay).toBeLessThan(1500);
 
     await worker.close();
     await redis.quit();

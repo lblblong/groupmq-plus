@@ -1,0 +1,16 @@
+# Add patterns to ignore here, one per line
+# Example:
+# *.log
+# tmp/
+
+website/
+example/
+examples/
+scripts/
+benchmark/
+.vscode
+.github
+CHANGELOG.md
+CHANGES_SUMMARY.md
+biome.json
+README.md

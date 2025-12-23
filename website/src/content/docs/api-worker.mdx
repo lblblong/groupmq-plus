@@ -20,7 +20,11 @@ const worker = new Worker<{ foo: string }>({
   queue,
   heartbeatMs: 10_000,
   maxAttempts: 5,
-  backoff: (attempt) => Math.min(30_000, 2 ** (attempt - 1) * 500),
+  // Receives (attempt, error)
+  backoff: (attempt, err) => {
+    if (err && err.name === 'RateLimitError') return 60_000;
+    return Math.min(30_000, 2 ** (attempt - 1) * 500);
+  },
   async handler(job) {
     // do work with job.data
     return { ok: true }
@@ -40,7 +44,7 @@ new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, strategy?, st
 - `handler(job)` - async function receiving a reserved job
 - `heartbeatMs` - heartbeat interval; defaults to `queue.jobTimeoutMs / 3`
 - `maxAttempts` - worker-level cap (defaults to queue default)
-- `backoff(attempt)` - function returning ms to wait before retrying
+- `backoff(attempt, error)` - function returning ms to wait before retrying (receives the thrown error)
 - `strategy` - dispatch strategy for custom group selection (optional; see [Dispatch Strategies](/docs/dispatch-strategies))
 - `strategyPollInterval` - milliseconds between strategy queries (default: 50ms); only used if strategy is set
 - `enableCleanup` - periodically runs cleanup and cron promotions (default true)
@@ -49,6 +53,10 @@ new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, strategy?, st
 - `atomicCompletion` - complete and try to reserve next in-group (default true)
 - `concurrency` - number of jobs to process concurrently (default 1)
 - `logger` - `true` to enable default logs or pass a Logger
+
+**Unrecoverable errors**:
+
+- Throw `new UnrecoverableError('message')` inside your handler to skip retries and dead-letter immediately.
 
 **Stalled Job Detection**:
 - `stalledInterval` - check interval for stalled jobs in ms (default: 30000)
