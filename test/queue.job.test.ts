@@ -1,21 +1,19 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { type Job, Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Job Tests', () => {
   const namespace = `test:job:${Date.now()}`;
 
   afterAll(async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should always return a job entity', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({
       redis,
       namespace: `${namespace}:dedupe`,
@@ -97,7 +95,7 @@ describe('Job Tests', () => {
   });
 
   it('should update job data via queue and via job instance', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:update`,
@@ -120,7 +118,7 @@ describe('Job Tests', () => {
   });
 
   it('should process updated job data in the worker', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:update-worker`,
@@ -151,7 +149,7 @@ describe('Job Tests', () => {
   });
 
   it('should promote a delayed job and process it immediately', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:promote`,
@@ -180,7 +178,7 @@ describe('Job Tests', () => {
   });
 
   it('should remove a waiting job and not process it', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:remove`,
@@ -211,7 +209,7 @@ describe('Job Tests', () => {
   });
 
   it('should give the error for a failed job', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({
       redis,
       namespace: `${namespace}:failed`,

@@ -328,6 +328,87 @@ const results = await queue.checkStalledJobs(now, 1000, 1)
 // Results: ['job-123', 'group-1', 'recovered', 'job-456', 'group-2', 'failed', ...]
 ```
 
+### addFlow(opts)
+
+Create a parent job with multiple child jobs atomically. Children execute in parallel; parent queues automatically when all children complete.
+
+```ts
+const result = await queue.addFlow({
+  parent: {
+    groupId: 'workflows',
+    data: { workflowId: '123' },
+    jobId?: 'custom-id', // optional
+  },
+  children: [
+    { groupId: 'item:1', data: { itemId: 1 } },
+    { groupId: 'item:2', data: { itemId: 2 } },
+    { groupId: 'item:3', data: { itemId: 3 } },
+  ],
+})
+
+// Returns { parentId: string, childIds: string[] }
+```
+
+See [Parent-Child Flows](/docs/parent-child-flows) for detailed examples.
+
+### setGroupConcurrency(groupId, limit)
+
+Set the maximum number of concurrent jobs allowed for a specific group. Default is 1 (strict FIFO per group).
+
+```ts
+// VIP group: allow up to 5 jobs in parallel
+await queue.setGroupConcurrency('vip:user:1', 5)
+
+// Standard group: keep at default (1, strict FIFO)
+await queue.setGroupConcurrency('standard:user:2', 1)
+```
+
+See [Group Concurrency](/docs/group-concurrency) for use cases and examples.
+
+### getGroupConcurrency(groupId)
+
+Get the current concurrency limit for a specific group.
+
+```ts
+const limit = await queue.getGroupConcurrency('vip:user:1')
+// Returns: number (default is 1 if not explicitly set)
+```
+
+### getFlowDependencies(parentId)
+
+Get the number of remaining child jobs for a parent job in a flow.
+
+```ts
+const remaining = await queue.getFlowDependencies(parentId)
+// Returns: number | null
+// - number: count of children not yet completed
+// - null: if the job is not a parent job
+```
+
+### getFlowResults(parentId)
+
+Get the results of all completed child jobs in a flow.
+
+```ts
+const results = await queue.getFlowResults(parentId)
+// Returns: Record<string, any>
+// - Keys are child job IDs
+// - Values are the return values from child job handlers
+```
+
+### getReadyGroups(start, end)
+
+Get a range of ready groups (those with pending jobs) from the ready queue.
+
+```ts
+// Get first 100 ready groups
+const groups = await queue.getReadyGroups(0, 100)
+// Returns: string[] - array of groupIds
+
+// Used internally by dispatch strategies
+const allReady = await queue.getReadyGroups(0, -1)
+```
+
 ### close()
 
 Close underlying Redis connections.

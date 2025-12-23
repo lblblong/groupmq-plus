@@ -60,6 +60,32 @@ Get the current status inferred from Redis.
 const state = await job.getState()
 ```
 
+### getChildrenValues()
+
+(Parent jobs only) Get all child job results and failures. Returns array of child return values, Errors for failed children, or null for unresolved results.
+
+```ts
+// In parent job handler
+const worker = new Worker({
+  queue,
+  handler: async (job) => {
+    if (!job.parentId) {
+      // This is a parent job
+      const childResults = await job.getChildrenValues()
+      // childResults: Array<T | Error | null>
+      
+      const successCount = childResults.filter(r => !(r instanceof Error)).length
+      const failureCount = childResults.filter(r => r instanceof Error).length
+      
+      console.log(`${successCount} succeeded, ${failureCount} failed`)
+      return { summary: { successCount, failureCount } }
+    }
+  },
+})
+```
+
+See [Parent-Child Flows](/docs/parent-child-flows) for details.
+
 ### Shape
 
 ```ts
@@ -83,6 +109,7 @@ class Job<T> {
   id: string
   data: T
   groupId: string
+  parentId?: string           // Set if this is a child job
   attemptsMade: number
   opts: { attempts: number; delay?: number }
   processedOn?: number
@@ -100,6 +127,7 @@ class Job<T> {
   remove(): Promise<void>
   retry(): Promise<void>
   getState(): Promise<'active' | 'waiting' | 'completed' | 'failed' | 'delayed' | 'paused' | 'unknown'>
+  getChildrenValues(): Promise<Array<T | Error | null>>  // Parent jobs only
 }
 ```
 

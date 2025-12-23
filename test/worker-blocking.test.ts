@@ -1,10 +1,10 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Queue } from '../src/queue';
 import { Worker } from '../src/worker';
+import { createRedis } from './helpers/redis';
 
 describe('Worker Blocking Detection Tests', () => {
-  let redis: Redis;
+  let redis: any;
   let queue: Queue;
   let workers: Worker[] = [];
   let namespace: string;
@@ -13,11 +13,7 @@ describe('Worker Blocking Detection Tests', () => {
     // Create unique namespace for each test to avoid interference
     namespace = `test-blocking-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    redis = new Redis({
-      host: 'localhost',
-      port: 6379,
-      maxRetriesPerRequest: null,
-    });
+    redis = createRedis();
 
     // Clear any existing test data
     const keys = await redis.keys(`groupmq:${namespace}:*`);

@@ -1,11 +1,9 @@
-import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('basic per-group FIFO and parallelism', () => {
-  const redis = new Redis(REDIS_URL);
+  const redis = createRedis();
   const namespace = `test:q1:${Date.now()}`;
 
   beforeAll(async () => {

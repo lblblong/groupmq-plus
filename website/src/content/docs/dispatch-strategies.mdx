@@ -1,0 +1,298 @@
+---
+title: Custom Dispatch Strategies
+description: Implement custom scheduling logic with dispatch strategies for priority-based group processing.
+---
+
+## Overview
+
+GroupMQ supports **custom dispatch strategies** to control how workers select which group to process next. This enables advanced scheduling patterns like VIP group prioritization, weighted round-robin, and dynamic load balancing.
+
+Without a strategy, workers use a default round-robin approach. With a strategy, you can implement business-specific logic to optimize throughput and fairness across groups.
+
+## When to Use Strategies
+
+- **Priority-based processing**: Process VIP customer groups before standard ones
+- **Weighted scheduling**: Allocate different processing shares to different groups
+- **Dynamic prioritization**: Adjust priorities based on real-time metrics
+- **Fair queuing**: Implement custom fairness algorithms
+
+## How It Works
+
+When a strategy is configured on a worker:
+
+1. **Strategy queries ready groups** - `getNextGroup()` is called to ask "which group should I process next?"
+2. **Worker reserves atomically** - Once a group is selected, `reserveAtomic()` fetches one job
+3. **Short polling** - Since strategies require active decision-making, workers use short-polling instead of blocking reads
+4. **Performance trade-off** - Strategies provide control but consume more Redis queries (typically 10-20% throughput loss)
+
+## Basic Example: Priority Strategy
+
+```ts
+import { Queue, Worker } from 'groupmq'
+import { PriorityStrategy } from 'groupmq/strategies'
+
+const redis = new Redis()
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Configure group priorities in Redis (persistent)
+await queue.setGroupConfig('vip-group', { priority: 100 })
+await queue.setGroupConfig('standard-group', { priority: 10 })
+await queue.setGroupConfig('low-priority', { priority: 1 })
+
+// Create a priority strategy (automatically reads from Redis config)
+const strategy = new PriorityStrategy()
+
+// Start worker with strategy
+const worker = new Worker({
+  queue,
+  strategy,
+  strategyPollInterval: 50, // milliseconds between strategy queries
+  handler: async (job) => {
+    console.log(`Processing ${job.id} from ${job.groupId}`)
+  },
+})
+
+worker.run()
+```
+
+## Available Strategies
+
+### PriorityStrategy
+
+Groups with higher priority values are processed first. Priority is read from Redis config by default.
+
+```ts
+// Method 1: Use Redis config (recommended)
+await queue.setGroupConfig('vip:user:1', { priority: 100 })
+await queue.setGroupConfig('standard:user:2', { priority: 10 })
+const strategy = new PriorityStrategy()
+
+// Method 2: Custom weight calculation
+const strategy = new PriorityStrategy({
+  onGetPriority: (groupId, config) => {
+    // VIP groups get 10x priority boost
+    if (groupId.startsWith('vip:')) return config.priority * 10
+    return config.priority
+  },
+  cacheTtlMs: 5000, // Cache priorities for 5 seconds
+})
+
+// Method 3: Temporary override (highest precedence)
+strategy.setPriority('emergency-group', 9999)
+strategy.clearPriority('emergency-group') // Remove override
+```
+
+### Scheduling Algorithms
+
+PriorityStrategy supports three scheduling algorithms via the `algorithm` option:
+
+#### Strict Algorithm
+
+Always selects the highest priority group. May cause starvation for low-priority groups.
+
+```ts
+const strategy = new PriorityStrategy({
+  algorithm: { type: 'strict' }
+})
+
+// VIP groups (priority: 100) will ALWAYS be processed before standard groups (priority: 1)
+// Low-priority groups may never get processed if high-priority groups keep adding jobs
+```
+
+#### Weighted Random Algorithm (Default)
+
+Selects groups probabilistically based on priority weights. Ensures low-priority groups still get a chance to be processed.
+
+```ts
+const strategy = new PriorityStrategy({
+  algorithm: { 
+    type: 'weighted-random',
+    minWeightRatio: 0.1  // Default: 0.1 (10%)
+  }
+})
+
+// Example: VIP priority 100, Standard priority 1
+// Without minWeightRatio: Standard has 1/(100+1) ≈ 1% chance
+// With minWeightRatio 0.1: Standard weight becomes max(1, 100*0.1) = 10
+//   So Standard has 10/(100+10) ≈ 9% chance
+```
+
+The `minWeightRatio` parameter ensures low-priority groups get a minimum share of processing time.
+
+#### Aging Algorithm
+
+Increases priority based on wait time, ensuring all jobs eventually get processed (no starvation).
+
+```ts
+const strategy = new PriorityStrategy({
+  algorithm: { 
+    type: 'aging',
+    intervalMs: 60000  // Default: 60000 (1 minute)
+  }
+})
+
+// Example: VIP priority 100, Standard priority 1
+// After 100 minutes of waiting, Standard's effective priority becomes:
+//   1 + (100 * 60000 / 60000) = 1 + 100 = 101
+// Now Standard has higher priority than VIP!
+```
+
+The `intervalMs` parameter controls how fast priority increases with wait time.
+
+### PriorityStrategy Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `algorithm` | `AlgorithmConfig` | `{ type: 'weighted-random' }` | Scheduling algorithm to use |
+| `defaultPriority` | `number` | `1` | Default priority for groups without explicit config |
+| `cacheTtlMs` | `number` | `5000` | How long to cache priority values (ms). Set to 0 to disable caching |
+| `onGetPriority` | `function` | `undefined` | Custom priority calculation function |
+
+### Algorithm Comparison
+
+| Algorithm | Fairness | Starvation Risk | Use Case |
+|-----------|----------|-----------------|----------|
+| `strict` | None | High | VIP must always go first |
+| `weighted-random` | Probabilistic | Low | Balance priority with fairness |
+| `aging` | Time-based | None | Guarantee all jobs eventually process |
+
+## Custom Strategy Implementation
+
+Implement the `DispatchStrategy` interface to create your own:
+
+```ts
+import { DispatchStrategy } from 'groupmq'
+
+class CustomStrategy implements DispatchStrategy {
+  /**
+   * Return the next group to process, or null if queue is empty
+   * This is called frequently by the worker (every 50ms by default)
+   */
+  async getNextGroup(queue: Queue<any>): Promise<string | null> {
+    // Get all ready groups from the queue
+    const readyGroups = await queue.getReadyGroups(0, 100)
+    
+    if (readyGroups.length === 0) return null
+    
+    // Implement your logic here
+    // Example: process groups with fewer active jobs first (load balancing)
+    const selectedGroup = readyGroups[0]
+    
+    return selectedGroup
+  }
+}
+
+// Use your custom strategy
+const strategy = new CustomStrategy()
+const worker = new Worker({ queue, strategy, handler: ... })
+```
+
+## Performance Considerations
+
+### Strategy Overhead
+
+Strategies require short-polling instead of Redis blocking operations:
+
+| Mode | Method | Throughput | Redis Load | Latency |
+|------|--------|-----------|-----------|---------|
+| **No Strategy** | `BZPOPMIN` (blocking) | ~5000 jobs/sec | Low | &lt;1ms |
+| **With Strategy** | Short-polling (50ms) | ~4000 jobs/sec | Medium | 5-50ms |
+
+### Optimization Tips
+
+1. **Tune poll interval** - Balance responsiveness vs Redis load
+   ```ts
+   new Worker({
+     queue,
+     strategy,
+     strategyPollInterval: 20,  // More responsive (10-20ms typical)
+     // or
+     strategyPollInterval: 100, // Less Redis load
+   })
+   ```
+
+2. **Cache group metadata** - If your strategy requires external lookups, cache results
+   ```ts
+   class CachedStrategy implements DispatchStrategy {
+     private cache = new Map<string, Priority>()
+     
+     async getNextGroup(queue: Queue<any>): Promise<string | null> {
+       const readyGroups = await queue.getReadyGroups(0, 100)
+       if (readyGroups.length === 0) return null
+       
+       // Sort by cached priorities instead of recalculating
+       return readyGroups.sort((a, b) => 
+         (this.cache.get(b) ?? 1) - (this.cache.get(a) ?? 1)
+       )[0]
+     }
+   }
+   ```
+
+3. **Limit scope** - Only use strategies where needed
+   ```ts
+   // Worker without strategy (faster)
+   const fastWorker = new Worker({ queue, handler: ... })
+   
+   // Another worker with strategy (prioritization)
+   const priorityWorker = new Worker({ 
+     queue, 
+     strategy: new PriorityStrategy(), 
+     handler: ... 
+   })
+   ```
+
+## Combining with Other Features
+
+Strategies work well with other GroupMQ features:
+
+```ts
+const queue = new Queue({
+  redis,
+  namespace: 'app',
+  // Combine with group concurrency limits
+})
+
+// Set different concurrency limits per group
+await queue.setGroupConcurrency('vip:user:1', 5)      // VIP: 5 parallel jobs
+await queue.setGroupConcurrency('standard:user:2', 1) // Standard: serial
+
+// Use strategy to prioritize
+const strategy = new PriorityStrategy()
+strategy.setPriority('vip:user:1', 100)
+
+const worker = new Worker({
+  queue,
+  strategy,
+  concurrency: 10, // Overall worker concurrency
+  handler: async (job) => { /* ... */ },
+})
+
+worker.run()
+```
+
+## Monitoring & Debugging
+
+```ts
+class InstrumentedStrategy implements DispatchStrategy {
+  private lastSelected: string | null = null
+  private selectionCounts = new Map<string, number>()
+
+  async getNextGroup(queue: Queue<any>): Promise<string | null> {
+    const readyGroups = await queue.getReadyGroups(0, 100)
+    if (readyGroups.length === 0) return null
+
+    const selected = readyGroups[0]
+    this.lastSelected = selected
+    this.selectionCounts.set(selected, (this.selectionCounts.get(selected) ?? 0) + 1)
+
+    return selected
+  }
+
+  getStats() {
+    return {
+      lastSelected: this.lastSelected,
+      selectionCounts: Object.fromEntries(this.selectionCounts),
+    }
+  }
+}
+```

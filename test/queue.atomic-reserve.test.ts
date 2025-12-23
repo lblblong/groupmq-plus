@@ -1,7 +1,7 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
 import type { LoggerInterface } from '../src/logger';
+import { createRedis } from './helpers/redis';
 
 /**
  * Test logger that captures race condition warnings for testing
@@ -69,16 +69,14 @@ class TestLogger implements LoggerInterface {
   }
 }
 
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-
 describe('Atomic Reserve Race Condition Tests', () => {
-  let redis: Redis;
+  let redis: any;
   let namespace: string;
   let queue: Queue<any>;
   let workers: Worker<any>[] = [];
 
   beforeEach(async () => {
-    redis = new Redis(REDIS_URL);
+    redis = createRedis();
     namespace = `test:atomic:${Date.now()}`;
 
     // Clear any existing keys for this namespace

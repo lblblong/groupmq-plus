@@ -1,0 +1,204 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { Queue, Worker } from '../src';
+import { createRedis } from './helpers/redis';
+
+describe('Parent-Child Flows', () => {
+  const redis = createRedis();
+  const namespace = `test:flow:${Date.now()}`;
+
+  beforeAll(async () => {
+    const keys = await redis.keys(`${namespace}*`);
+    if (keys.length) await redis.del(keys);
+  });
+
+  afterAll(async () => {
+    await redis.quit();
+  });
+
+  it('should process parent only after all children complete', async () => {
+    const queue = new Queue({ redis, namespace, logger: true, keepCompleted: 1 });
+    
+    const parentId = 'parent-1';
+    const child1Id = 'child-1';
+    const child2Id = 'child-2';
+
+    await queue.addFlow({
+      parent: { jobId: parentId, groupId: 'g-parent', data: { name: 'parent' } },
+      children: [
+        { jobId: child1Id, groupId: 'g-child-1', data: { name: 'child1' } },
+        { jobId: child2Id, groupId: 'g-child-2', data: { name: 'child2' } },
+      ],
+    });
+    console.log('Flow added. Namespace:', namespace);
+
+    // Check initial states
+    const parent = await queue.getJob(parentId);
+    expect(parent.status).toBe('waiting-children');
+    
+    const remaining = await queue.getFlowDependencies(parentId);
+    expect(remaining).toBe(2);
+
+    const processed: string[] = [];
+    const worker = new Worker({
+      queue,
+      logger: true,
+      handler: async (job) => {
+        console.log('Processing job:', job.id);
+        processed.push(job.id);
+      },
+    });
+    worker.run();
+
+    // Wait for children to be processed
+    await new Promise<void>((resolve) => {
+      const check = setInterval(async () => {
+        if (processed.length >= 2) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 100);
+    });
+
+    expect(processed).toContain(child1Id);
+    expect(processed).toContain(child2Id);
+    expect(await queue.getFlowDependencies(parentId)).toBe(0);
+    
+    // Parent should now be 'waiting', 'active' or already 'completed' (if worker is fast)
+    const parentAfterChildren = await queue.getJob(parentId);
+    expect(['waiting', 'active', 'completed']).toContain(parentAfterChildren.status);
+
+    // Wait for parent to be processed
+    await new Promise<void>((resolve) => {
+      const check = setInterval(async () => {
+        if (processed.length >= 3) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 100);
+    });
+
+    expect(processed).toContain(parentId);
+    expect((await queue.getJob(parentId)).status).toBe('completed');
+
+    await worker.close();
+  });
+
+  it('should trigger parent even if a child fails completely', async () => {
+    // 1. 配置队列
+    const queue = new Queue({ redis, namespace: `${namespace}-fail`, logger: false });
+    
+    // 2. 添加 Flow：1个子任务必然失败
+    await queue.addFlow({
+      parent: { groupId: 'p-g', data: { name: 'parent' } },
+      children: [
+        { groupId: 'c-g', data: { fail: true }, maxAttempts: 1 }, // 重试1次后失败
+        { groupId: 'c-g', data: { fail: false } }
+      ]
+    });
+
+    const completedJobs: string[] = [];
+    
+    const worker = new Worker({
+      queue,
+      handler: async (job) => {
+        if (job.data.fail) {
+          throw new Error('Planned failure');
+        }
+        completedJobs.push(job.id);
+        return 'ok';
+      }
+    });
+
+    // 等待足够长的时间让失败发生并记录
+    await new Promise(r => setTimeout(r, 2000));
+
+    // 验证：父任务是否进入了 Completed 状态 (虽然子任务失败，但父任务被触发执行了)
+    // 注意：这里假设父任务本身执行成功。
+    // 在实际业务中，父任务 handler 应该检查 getFlowResults() 里的结果来决定自己是成功还是失败
+    const processedParent = completedJobs.find(id => id.length > 10); // 简单的ID判断
+    expect(processedParent).toBeDefined(); // 父任务应该被执行
+
+    await worker.close();
+  });
+
+  it('should store and retrieve child results via getFlowResults', async () => {
+    const queue = new Queue({ redis, namespace: `${namespace}-results`, logger: false, keepCompleted: 10 });
+    
+    const parentId = 'parent-results';
+    
+    await queue.addFlow({
+      parent: { jobId: parentId, groupId: 'p-g', data: { name: 'parent' } },
+      children: [
+        { jobId: 'child-a', groupId: 'c-g', data: { value: 10 } },
+        { jobId: 'child-b', groupId: 'c-g', data: { value: 20 } },
+      ],
+    });
+
+    const worker = new Worker({
+      queue,
+      handler: async (job) => {
+        if (job.data.value) {
+          // 子任务返回计算结果
+          return { computed: job.data.value * 2 };
+        }
+        // 父任务：获取所有子任务结果
+        const results = await queue.getFlowResults(job.id);
+        return { childResults: results };
+      }
+    });
+
+    await new Promise(r => setTimeout(r, 2000));
+    await worker.close();
+
+    // 验证子任务结果被正确存储
+    const flowResults = await queue.getFlowResults(parentId);
+    expect(flowResults['child-a']).toEqual({ computed: 20 });
+    expect(flowResults['child-b']).toEqual({ computed: 40 });
+  });
+
+  it('should trigger parent when child is dead-lettered', async () => {
+    const queue = new Queue({ 
+      redis, 
+      namespace: `${namespace}-deadletter`, 
+      logger: false,
+      keepFailed: 10,
+      keepCompleted: 10
+    });
+    
+    const parentId = 'parent-dl';
+    
+    await queue.addFlow({
+      parent: { jobId: parentId, groupId: 'p-g', data: { name: 'parent' } },
+      children: [
+        { jobId: 'child-ok', groupId: 'c-g-ok', data: { fail: false } }, // 不同的组
+        { jobId: 'child-fail', groupId: 'c-g-fail', data: { fail: true }, maxAttempts: 1 }, // 不同的组，只重试1次
+      ],
+    });
+
+    const processedJobs: string[] = [];
+    
+    const worker = new Worker({
+      queue,
+      handler: async (job) => {
+        if (job.data.fail) {
+          throw new Error('Intentional failure');
+        }
+        processedJobs.push(job.id);
+        return 'success';
+      }
+    });
+
+    // 等待足够时间让失败任务进入 dead-letter
+    await new Promise(r => setTimeout(r, 3000));
+    await worker.close();
+
+    // 验证父任务被触发执行了
+    expect(processedJobs).toContain(parentId);
+    
+    // 验证 flowResults 包含结果
+    const flowResults = await queue.getFlowResults(parentId);
+    expect(flowResults['child-ok']).toBe('success');
+    // 失败的子任务结果应该包含错误信息
+    expect(flowResults['child-fail']).toBeDefined();
+  });
+});

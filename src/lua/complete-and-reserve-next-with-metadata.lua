@@ -16,8 +16,13 @@ local maxAttempts = ARGV[11]
 local now = tonumber(ARGV[12])
 local vt = tonumber(ARGV[13])
 
--- Part 1: Atomically verify and mark completion (prevent duplicate processing)
 local jobKey = ns .. ":job:" .. completedJobId
+
+-- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
+local parentId = redis.call("HGET", jobKey, "parentId")
+-- [PHASE 3 MODIFICATION END]
+
+-- Part 1: Atomically verify and mark completion (prevent duplicate processing)
 local processingKey = ns .. ":processing"
 
 -- CRITICAL: Check both status AND processing set membership atomically
@@ -44,6 +49,42 @@ if status == "completed" then
   -- CRITICAL: Always set final status first, even if job will be deleted
   -- This ensures any concurrent reads see "completed", not "completing"
   redis.call("HSET", jobKey, "status", "completed")
+
+  -- [PHASE 3 MODIFICATION START: Update parent flow if exists]
+  if parentId then
+    local parentKey = ns .. ":job:" .. parentId
+    -- 1. Store child result in flow:results hash (CRITICAL: was missing!)
+    local flowResultsKey = ns .. ":flow:results:" .. parentId
+    redis.call("HSET", flowResultsKey, completedJobId, resultOrError)
+    
+    -- 2. Decrement remaining counter
+    local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)
+    
+    -- 3. If all children done, move parent to waiting
+    if remaining <= 0 then
+      local parentStatus = redis.call("HGET", parentKey, "status")
+      if parentStatus == "waiting-children" then
+        redis.call("HSET", parentKey, "status", "waiting")
+        local parentGroupId = redis.call("HGET", parentKey, "groupId")
+        local parentScore = tonumber(redis.call("HGET", parentKey, "score"))
+        if not parentScore then
+          parentScore = tonumber(now)
+        end
+        
+        local pGZ = ns .. ":g:" .. parentGroupId
+        redis.call("ZADD", pGZ, parentScore, parentId)
+        redis.call("SADD", ns .. ":groups", parentGroupId)
+        
+        -- Check if should add to ready queue (if head)
+        local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
+        if pHead and #pHead >= 2 then
+           local pHeadScore = tonumber(pHead[2])
+           redis.call("ZADD", ns .. ":ready", pHeadScore, parentGroupId)
+        end
+      end
+    end
+  end
+  -- [PHASE 3 MODIFICATION END]
   
   if keepCompleted > 0 then
     -- Store full job metadata and add to completed set
@@ -67,6 +108,7 @@ if status == "completed" then
           local oldId = oldIds[i]
           redis.call("DEL", ns .. ":job:" .. oldId)
           redis.call("DEL", ns .. ":unique:" .. oldId)
+          redis.call("DEL", ns .. ":flow:results:" .. oldId)
         end
       end
     end
@@ -74,6 +116,7 @@ if status == "completed" then
     -- keepCompleted == 0: Delete immediately (status already set above)
     redis.call("DEL", jobKey)
     redis.call("DEL", ns .. ":unique:" .. completedJobId)
+    redis.call("DEL", ns .. ":flow:results:" .. completedJobId)
   end
   
 elseif status == "failed" then
@@ -98,6 +141,7 @@ elseif status == "failed" then
     -- Delete job (status already set above)
     redis.call("DEL", jobKey)
     redis.call("DEL", ns .. ":unique:" .. completedJobId)
+    redis.call("DEL", ns .. ":flow:results:" .. completedJobId)
   end
 end
 

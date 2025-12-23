@@ -1,4 +1,3 @@
-import Redis from 'ioredis';
 import {
   afterAll,
   afterEach,
@@ -9,16 +8,15 @@ import {
   it,
 } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Ordering with Staging Tests', () => {
   let namespace: string;
-  let redis: Redis;
+  let redis: any;
   let queue: Queue;
 
   beforeAll(async () => {
-    redis = new Redis(REDIS_URL);
+    redis = createRedis();
   });
 
   beforeEach(async () => {

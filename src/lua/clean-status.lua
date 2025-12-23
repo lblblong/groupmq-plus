@@ -51,9 +51,10 @@ for i = 1, #ids do
     end
   end
 
-  -- Delete job hash and idempotence key
+  -- Delete job hash, idempotence key and flow results
   redis.call('DEL', jobKey)
   redis.call('DEL', ns .. ':unique:' .. id)
+  redis.call('DEL', ns .. ':flow:results:' .. id)
 
   removed = removed + 1
 end

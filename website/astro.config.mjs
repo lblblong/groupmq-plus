@@ -71,6 +71,9 @@ export default defineConfig({
             { label: 'Stalled Jobs', slug: 'stalled-jobs' },
             { label: 'Scaling Workers', slug: 'scaling-workers' },
             { label: 'Performance Tips', slug: 'performance-tips' },
+            { label: 'Custom Dispatch Strategies', slug: 'dispatch-strategies' },
+            { label: 'Parent-Child Flows', slug: 'parent-child-flows' },
+            { label: 'Group Concurrency Control', slug: 'group-concurrency' },
           ],
         },
         {

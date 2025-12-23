@@ -1,13 +1,13 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
+import { createRedis } from './helpers/redis';
 
 describe('Auto-Batch with orderingDelayMs', () => {
-  let redisCleanup: Redis;
+  let redisCleanup: any;
 
   afterAll(async () => {
     // Clean up with a fresh connection
-    redisCleanup = new Redis({ maxRetriesPerRequest: null });
+    redisCleanup = createRedis();
     const keys = await redisCleanup.keys('groupmq:test-autobatch-ordering:*');
     if (keys.length > 0) {
       await redisCleanup.del(...keys);
@@ -16,7 +16,7 @@ describe('Auto-Batch with orderingDelayMs', () => {
   });
 
   it('should respect job ordering with autoBatch + orderingDelayMs', async () => {
-    const redis = new Redis({ maxRetriesPerRequest: null });
+    const redis = createRedis();
 
     // Clean up first
     const keys = await redis.keys('groupmq:test-autobatch-ordering:*');
@@ -108,7 +108,7 @@ describe('Auto-Batch with orderingDelayMs', () => {
   }, 15000);
 
   it('should handle mixed staging and immediate with autoBatch', async () => {
-    const redis = new Redis({ maxRetriesPerRequest: null });
+    const redis = createRedis();
 
     // Clean up first
     const keys = await redis.keys('groupmq:test-autobatch-ordering:*');
@@ -169,7 +169,7 @@ describe('Auto-Batch with orderingDelayMs', () => {
   }, 15000);
 
   it('should batch multiple groups with orderingDelayMs', async () => {
-    const redis = new Redis({ maxRetriesPerRequest: null });
+    const redis = createRedis();
 
     // Clean up first
     const keys = await redis.keys('groupmq:test-autobatch-ordering:*');

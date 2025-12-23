@@ -31,7 +31,7 @@ const worker = new Worker<{ foo: string }>({
 ### Constructor
 
 ```ts
-new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, ... })
+new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, strategy?, strategyPollInterval?, ... })
 ```
 
 ### Options
@@ -41,6 +41,8 @@ new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, ... })
 - `heartbeatMs` - heartbeat interval; defaults to `queue.jobTimeoutMs / 3`
 - `maxAttempts` - worker-level cap (defaults to queue default)
 - `backoff(attempt)` - function returning ms to wait before retrying
+- `strategy` - dispatch strategy for custom group selection (optional; see [Dispatch Strategies](/docs/dispatch-strategies))
+- `strategyPollInterval` - milliseconds between strategy queries (default: 50ms); only used if strategy is set
 - `enableCleanup` - periodically runs cleanup and cron promotions (default true)
 - `cleanupIntervalMs` - cadence for cleanup/promotions (default 60s)
 - `blockingTimeoutSec` - reserve blocking timeout (default 5s)
@@ -48,11 +50,29 @@ new Worker({ queue, handler, heartbeatMs?, maxAttempts?, backoff?, ... })
 - `concurrency` - number of jobs to process concurrently (default 1)
 - `logger` - `true` to enable default logs or pass a Logger
 
-**Stalled Job Detection** (new):
+**Stalled Job Detection**:
 - `stalledInterval` - check interval for stalled jobs in ms (default: 30000)
 - `maxStalledCount` - max times a job can stall before failing (default: 1)
 - `stalledGracePeriod` - grace period before marking as stalled in ms (default: 0)
 
+**Example with Strategy**:
+
+```ts
+import { PriorityStrategy } from 'groupmq/strategies'
+
+const strategy = new PriorityStrategy()
+strategy.setPriority('vip:user:1', 100)
+
+const worker = new Worker({
+  queue,
+  strategy,
+  strategyPollInterval: 50,  // Check strategy every 50ms
+  handler: async (job) => {
+    // Process jobs selected by strategy (VIP first)
+  },
+})
+
+worker.run()
 ```
 
 ### Reserve and completion

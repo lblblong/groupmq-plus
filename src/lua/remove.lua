@@ -46,8 +46,9 @@ if groupId then
   end
 end
 
--- Finally, delete the job hash
+-- Finally, delete the job hash and flow results
 redis.call("DEL", jobKey)
+redis.call("DEL", ns .. ":flow:results:" .. jobId)
 
 return 1
 

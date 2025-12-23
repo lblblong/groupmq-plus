@@ -1,7 +1,7 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Queue } from '../src/queue';
 import { Worker } from '../src/worker';
+import { createRedis } from './helpers/redis';
 
 /**
  * Stalled Job Detection Tests
@@ -24,7 +24,7 @@ import { Worker } from '../src/worker';
  * - 'stalled': Emitted when a stalled job is detected (jobId, groupId)
  */
 describe('Stalled Job Detection Tests', () => {
-  let redis: Redis;
+  let redis: any;
   let queue: Queue;
   let workers: Worker[] = [];
   let namespace: string;
@@ -32,11 +32,7 @@ describe('Stalled Job Detection Tests', () => {
   beforeEach(async () => {
     namespace = `test-stalled-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    redis = new Redis({
-      host: 'localhost',
-      port: 6379,
-      maxRetriesPerRequest: null,
-    });
+    redis = createRedis();
 
     const keys = await redis.keys(`groupmq:${namespace}:*`);
     if (keys.length > 0) {

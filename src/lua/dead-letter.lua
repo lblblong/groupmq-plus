@@ -5,6 +5,11 @@ local groupId = ARGV[2]
 local gZ = ns .. ":g:" .. groupId
 local readyKey = ns .. ":ready"
 
+local jobKey = ns .. ":job:" .. jobId
+
+-- [FLOW SUPPORT: Get parentId before any cleanup]
+local parentId = redis.call("HGET", jobKey, "parentId")
+
 -- Remove job from group
 redis.call("ZREM", gZ, jobId)
 
@@ -40,6 +45,42 @@ end
 
 -- Optionally store in dead letter queue (uncomment if needed)
 -- redis.call("LPUSH", ns .. ":dead", jobId)
+
+-- [FLOW SUPPORT: Update parent if this job is a child in a flow]
+if parentId then
+  local parentKey = ns .. ":job:" .. parentId
+  -- 1. Store error result in flow:results hash
+  local flowResultsKey = ns .. ":flow:results:" .. parentId
+  redis.call("HSET", flowResultsKey, jobId, '{"error":"dead-lettered"}')
+  
+  -- 2. Decrement remaining counter
+  local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)
+  
+  -- 3. If all children done, move parent to waiting
+  if remaining <= 0 then
+    local parentStatus = redis.call("HGET", parentKey, "status")
+    if parentStatus == "waiting-children" then
+      redis.call("HSET", parentKey, "status", "waiting")
+      
+      local parentGroupId = redis.call("HGET", parentKey, "groupId")
+      local parentScore = tonumber(redis.call("HGET", parentKey, "score"))
+      if not parentScore then
+        parentScore = tonumber(redis.call("TIME")[1]) * 1000
+      end
+      
+      local pGZ = ns .. ":g:" .. parentGroupId
+      redis.call("ZADD", pGZ, parentScore, parentId)
+      redis.call("SADD", ns .. ":groups", parentGroupId)
+      
+      -- Add to ready if head
+      local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
+      if pHead and #pHead >= 2 then
+         local pHeadScore = tonumber(pHead[2])
+         redis.call("ZADD", readyKey, pHeadScore, parentGroupId)
+      end
+    end
+  end
+end
 
 return 1
 

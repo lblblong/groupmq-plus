@@ -1,21 +1,19 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, type ReservedJob, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Edge Cases and Error Handling Tests', () => {
   const namespace = `test:edge:${Date.now()}`;
 
   afterAll(async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should handle empty payloads and null values', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:empty` });
 
     // Test various empty/null payloads
@@ -63,7 +61,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle extremely large payloads', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:large` });
 
     // Create large payload (1MB)
@@ -110,7 +108,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle special characters and unicode in payloads', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:unicode` });
 
     const specialPayloads = [
@@ -168,7 +166,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle malformed or corrupted data gracefully', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:corrupted` });
 
     // Manually insert corrupted data into Redis
@@ -221,7 +219,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle extremely long group IDs and job IDs', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:long` });
 
     // Create very long group ID (just under Redis key length limit)
@@ -259,7 +257,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle rapid worker start/stop cycles', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:rapid` });
 
     // Enqueue some jobs
@@ -313,7 +311,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle clock skew and time-based edge cases', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:time` });
 
     // Test jobs with timestamps far in the past and future
@@ -356,7 +354,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle circular references in payloads', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:circular` });
 
     // Create object with circular reference
@@ -380,7 +378,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle zero and negative visibility timeouts', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
 
     // Test with zero visibility timeout
     const q1 = new Queue({
@@ -410,7 +408,7 @@ describe('Edge Cases and Error Handling Tests', () => {
   });
 
   it('should handle queue operations on disconnected Redis', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:disconnected` });
 
     // Disconnect Redis

@@ -1,13 +1,13 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { Queue } from '../src/queue';
+import { createRedis } from './helpers/redis';
 
 describe('Corrupted/Missing Job Hash Tests', () => {
   let queue: Queue;
-  let redis: Redis;
+  let redis: any;
 
   beforeEach(async () => {
-    redis = new Redis({ maxRetriesPerRequest: null });
+    redis = createRedis();
     const ns = `test:corrupted:${Date.now()}`;
     queue = new Queue({
       redis,

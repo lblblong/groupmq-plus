@@ -1,17 +1,15 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Ready Queue Cleanup Tests', () => {
-  let redis: Redis;
+  let redis: any;
   let namespace: string;
   let queue: Queue<any>;
   let workers: Worker<any>[] = [];
 
   beforeEach(async () => {
-    redis = new Redis(REDIS_URL);
+    redis = createRedis();
     namespace = `test-ready-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     queue = new Queue({
       redis,

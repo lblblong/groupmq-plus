@@ -1,15 +1,15 @@
-import Redis from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src/index.js';
+import { createRedis } from './helpers/redis';
 
 describe('Poisoned Groups', () => {
   let q: Queue;
   let w: Worker;
-  let r: Redis;
+  let r: any;
   const ns = `test-poisoned-groups-${Date.now()}`;
 
   beforeEach(async () => {
-    r = new Redis({ maxRetriesPerRequest: null });
+    r = createRedis();
     // Clean slate before each test
     const keys = await r.keys(`${ns}*`);
     if (keys.length) await r.del(keys);

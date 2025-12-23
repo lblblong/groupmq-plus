@@ -1,22 +1,21 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
+import { Redis } from 'ioredis';
 
 describe('Redis Disconnect/Reconnect Tests', () => {
   const namespace = `test:disconnect:${Date.now()}`;
 
   afterAll(async () => {
     // Cleanup after all tests
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should handle Redis connection drops gracefully', async () => {
-    const redis = new Redis(REDIS_URL, {
+    const redis = createRedis({
       lazyConnect: true,
       maxRetriesPerRequest: 3,
     });
@@ -69,7 +68,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
   });
 
   it('should recover from Redis server restart simulation', async () => {
-    const redis = new Redis(REDIS_URL, {
+    const redis = createRedis({
       connectTimeout: 1000,
       enableReadyCheck: true,
       maxRetriesPerRequest: 3,
@@ -115,7 +114,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
   });
 
   it('should handle network partitions and blocking operations', async () => {
-    const redis = new Redis(REDIS_URL, {
+    const redis = createRedis({
       connectTimeout: 1000,
       commandTimeout: 2000,
     });
@@ -146,7 +145,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis.disconnect();
 
     // Try to add job during partition using separate connection
-    const redis2 = new Redis(REDIS_URL);
+    const redis2 = createRedis();
     const q2 = new Queue({
       redis: redis2,
       namespace: `${namespace}:partition`,
@@ -178,7 +177,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
   });
 
   it('should maintain job state consistency during Redis failures', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({
       redis,
       namespace: `${namespace}:consistency`,
@@ -227,7 +226,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     try {
       // Create many connections to test connection pooling
       for (let i = 0; i < 10; i++) {
-        const redis = new Redis(REDIS_URL, {
+        const redis = createRedis({
           maxRetriesPerRequest: 1,
           connectTimeout: 1000,
         });
@@ -286,7 +285,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
   it('should handle Redis AUTH failures gracefully', async () => {
     // This test assumes Redis is running without AUTH
     // In a real scenario, you'd test with wrong credentials
-    const redis = new Redis(REDIS_URL, {
+    const redis = createRedis({
       connectTimeout: 1000,
       maxRetriesPerRequest: 2,
     });

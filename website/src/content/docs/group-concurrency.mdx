@@ -1,0 +1,335 @@
+---
+title: Group Concurrency Control
+description: Set different concurrency limits for different groups to optimize resource allocation.
+---
+
+## Overview
+
+By default, GroupMQ enforces **one job per group** (`concurrency = 1` per group), ensuring strict FIFO ordering within each group. **Group concurrency control** lets you override this limit per group, allowing different groups to run jobs in parallel.
+
+This is useful for:
+- **VIP/Standard tiers**: VIP customer groups process 5 jobs in parallel, standard groups run 1
+- **Resource-intensive groups**: Limit heavy compute groups to 2 parallel, light groups to 10
+- **Quality of Service (QoS)**: Prioritize high-value groups with more concurrency
+- **Load balancing**: Balance resource allocation across business entities
+
+## How It Works
+
+Without explicit configuration, all groups have a concurrency limit of 1:
+
+```ts
+// Without configuration
+await queue.add({ groupId: 'user:1', data: { id: 'job-a' } })
+await queue.add({ groupId: 'user:1', data: { id: 'job-b' } })
+// Only job-a runs, job-b waits (concurrency = 1 per group)
+```
+
+With group concurrency control:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// VIP users can have 5 jobs running in parallel
+await queue.setGroupConcurrency('vip:user:1', 5)
+
+// Standard users have the default 1 (FIFO)
+await queue.setGroupConcurrency('standard:user:2', 1)
+
+// Create jobs
+await queue.add({ groupId: 'vip:user:1', data: { id: 'job-a' } })
+await queue.add({ groupId: 'vip:user:1', data: { id: 'job-b' } })
+await queue.add({ groupId: 'vip:user:1', data: { id: 'job-c' } })
+// All 3 run in parallel (up to the limit of 5)
+
+await queue.add({ groupId: 'standard:user:2', data: { id: 'job-x' } })
+await queue.add({ groupId: 'standard:user:2', data: { id: 'job-y' } })
+// Only job-x runs, job-y waits
+```
+
+## Basic Setup
+
+```ts
+import { Queue, Worker } from 'groupmq'
+
+const redis = new Redis()
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Define concurrency limits for different groups
+async function setupConcurrency() {
+  // VIP groups: high concurrency
+  for (let i = 1; i <= 10; i++) {
+    await queue.setGroupConcurrency(`vip:user:${i}`, 5)
+  }
+
+  // Standard groups: default (1)
+  // (no need to set, defaults to 1)
+
+  // Batch processing: medium concurrency
+  await queue.setGroupConcurrency('batch:processor', 3)
+}
+
+const worker = new Worker({
+  queue,
+  concurrency: 20, // Overall worker concurrency
+  handler: async (job) => {
+    const { groupId, data } = job
+    console.log(`Processing job from ${groupId}`, data)
+    // Concurrency is now limited per group, not globally
+  },
+})
+
+await setupConcurrency()
+worker.run()
+```
+
+## Tiered Service Example
+
+```ts
+const queue = new Queue({ redis, namespace: 'platform' })
+
+// Gold tier: 10 parallel jobs per customer
+async function setupGoldTier(customerId: string) {
+  await queue.setGroupConcurrency(`gold:${customerId}`, 10)
+}
+
+// Silver tier: 5 parallel jobs
+async function setupSilverTier(customerId: string) {
+  await queue.setGroupConcurrency(`silver:${customerId}`, 5)
+}
+
+// Bronze tier: 1 job at a time (default)
+// No need to set, uses default
+
+// Setup
+await setupGoldTier('customer:123')    // Gold customer
+await setupSilverTier('customer:456')  // Silver customer
+// customer:789 gets default (1)
+
+// Worker processes jobs respecting per-group limits
+const worker = new Worker({
+  queue,
+  concurrency: 100, // Can handle 100 concurrent jobs overall
+  handler: async (job) => {
+    const { groupId, data } = job
+    console.log(`[${groupId}] Processing`, data)
+    await processPayload(data)
+  },
+})
+
+worker.run()
+```
+
+## Dynamic Concurrency Adjustment
+
+Adjust concurrency limits in real-time:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Start with default
+let limit = 1
+
+// Monitor and adjust
+async function adaptConcurrency(groupId: string) {
+  while (true) {
+    const activeCount = await queue.getActiveCount()
+    const waitingCount = await queue.getWaitingCount()
+
+    // If queue is backing up, increase concurrency
+    if (waitingCount > 100 && limit < 10) {
+      limit++
+      await queue.setGroupConcurrency(groupId, limit)
+      console.log(`Increased ${groupId} concurrency to ${limit}`)
+    }
+
+    // If resources are idle, decrease
+    if (activeCount < 2 && limit > 1) {
+      limit--
+      await queue.setGroupConcurrency(groupId, limit)
+      console.log(`Decreased ${groupId} concurrency to ${limit}`)
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 5000))
+  }
+}
+
+adaptConcurrency('standard:user:1')
+```
+
+## Combining with Dispatch Strategies
+
+Use group concurrency with custom dispatch strategies for fine-grained control:
+
+```ts
+import { Queue, Worker } from 'groupmq'
+import { PriorityStrategy } from 'groupmq/strategies'
+
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Set concurrency limits
+await queue.setGroupConcurrency('vip:user:1', 5)      // VIP: 5 parallel
+await queue.setGroupConcurrency('standard:user:2', 1) // Standard: serial
+
+// Use strategy to prioritize VIP groups
+const strategy = new PriorityStrategy()
+strategy.setPriority('vip:user:1', 100)
+strategy.setPriority('standard:user:2', 1)
+
+// Worker respects both strategy (priority) and concurrency limits
+const worker = new Worker({
+  queue,
+  strategy,
+  concurrency: 10,
+  handler: async (job) => {
+    console.log(`[Priority] Processing ${job.groupId}`)
+  },
+})
+
+worker.run()
+
+// Behavior:
+// 1. Strategy selects vip:user:1 first (higher priority)
+// 2. Up to 5 jobs from vip:user:1 run in parallel
+// 3. standard:user:2 jobs run 1 at a time, only after VIP queue is empty
+```
+
+## Resource-Based Concurrency
+
+Adjust concurrency based on job resource requirements:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Heavy compute: limited concurrency
+await queue.setGroupConcurrency('compute:heavy', 2)
+
+// Light IO: higher concurrency
+await queue.setGroupConcurrency('io:light', 10)
+
+// Medium work: balanced
+await queue.setGroupConcurrency('batch:medium', 5)
+
+const worker = new Worker({
+  queue,
+  concurrency: 50,
+  handler: async (job) => {
+    const { groupId, data } = job
+
+    if (groupId.startsWith('compute:')) {
+      // Heavy work - runs with low concurrency limit
+      return heavyComputation(data)
+    } else if (groupId.startsWith('io:')) {
+      // Light IO - runs with high concurrency limit
+      return lightIoOperation(data)
+    } else {
+      return balancedWork(data)
+    }
+  },
+})
+
+worker.run()
+```
+
+## API Reference
+
+### Queue.setGroupConcurrency(groupId, limit)
+
+Set the maximum number of concurrent jobs for a group.
+
+```ts
+// Set concurrency
+await queue.setGroupConcurrency('user:123', 5)
+
+// Reset to default (1)
+await queue.setGroupConcurrency('user:456', 1)
+```
+
+### Queue.getGroupConcurrency(groupId)
+
+Get the current concurrency limit for a group.
+
+```ts
+// Get concurrency limit
+const limit = await queue.getGroupConcurrency('user:123')
+// Returns: number (default is 1 if not explicitly set)
+
+// Example: Dynamic adjustment based on current limit
+const currentLimit = await queue.getGroupConcurrency(groupId)
+if (waitingCount > 100 && currentLimit < 10) {
+  await queue.setGroupConcurrency(groupId, currentLimit + 1)
+  console.log(`Increased ${groupId} concurrency to ${currentLimit + 1}`)
+}
+```
+
+## Performance Implications
+
+| Aspect | Impact | Notes |
+|--------|--------|-------|
+| **Reserve logic** | Minimal (+5-10ms per reserve) | Checks concurrency limit via HGET before reserving |
+| **Memory** | Low | Stores concurrency config in Redis Hash, ~100 bytes per group |
+| **Scalability** | Excellent | Works with thousands of groups |
+
+## Monitoring
+
+Check concurrency state via job counts:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Monitor a group
+async function monitorGroup(groupId: string) {
+  const activeCount = await queue.getActiveCount()
+  const waitingCount = await queue.getWaitingCount()
+  const limit = 5 // You track this
+
+  console.log(`Group: ${groupId}`)
+  console.log(`Active: ${activeCount} / ${limit}`)
+  console.log(`Waiting: ${waitingCount}`)
+
+  if (activeCount >= limit) {
+    console.log('⚠️ Group at capacity!')
+  }
+}
+
+monitorGroup('vip:user:1')
+```
+
+## Best Practices
+
+1. **Start conservative** - Begin with lower concurrency and increase based on monitoring
+   ```ts
+   await queue.setGroupConcurrency('new:group', 1)  // Start low
+   // Monitor...
+   await queue.setGroupConcurrency('new:group', 3)  // Increase if stable
+   ```
+
+2. **Profile resource usage** - Match concurrency to available resources
+   ```ts
+   // Heavy: 2-3 parallel
+   // Medium: 5-8 parallel
+   // Light: 10-20 parallel
+   ```
+
+3. **Consider SLA requirements** - Higher concurrency = faster processing but more resource contention
+   ```ts
+   await queue.setGroupConcurrency('critical:service', 10)    // Prioritize speed
+   await queue.setGroupConcurrency('background:task', 1)      // Prioritize isolation
+   ```
+
+4. **Combine with monitoring**
+   ```ts
+   // Alert if queue depth grows
+   if (waitingCount > 1000) {
+     await queue.setGroupConcurrency(groupId, limit + 1)
+   }
+   ```
+
+5. **Test limits**
+   ```ts
+   // Run load tests with different concurrency values
+   for (let limit of [1, 2, 3, 5, 10]) {
+     await queue.setGroupConcurrency('test:group', limit)
+     const results = await runLoadTest()
+     console.log(`Limit ${limit}: ${results.throughput} jobs/sec`)
+   }
+   ```

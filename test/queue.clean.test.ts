@@ -1,21 +1,19 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Queue.clean', () => {
   const namespace = `test:clean:${Date.now()}`;
 
   afterAll(async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('cleans completed jobs older than grace time', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:completed`,
@@ -48,7 +46,7 @@ describe('Queue.clean', () => {
   });
 
   it('cleans failed jobs older than grace time', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:failed`,
@@ -82,7 +80,7 @@ describe('Queue.clean', () => {
   });
 
   it('cleans delayed jobs older than grace time', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue<{ n: number }>({
       redis,
       namespace: `${namespace}:delayed`,

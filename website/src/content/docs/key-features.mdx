@@ -18,6 +18,72 @@ await queue.add({ groupId: 'user:2', data: { id: 'c', ms: 100 } });
 
 Under the hood, the worker uses atomic completion to immediately reserve the next job from the same group, minimizing group contention and preserving FIFO.
 
+## Custom Dispatch Strategies
+
+Control which group's jobs the worker processes next using dispatch strategies. Enable priority-based processing, weighted scheduling, and custom fairness algorithms without modifying worker logic.
+
+```ts
+import { PriorityStrategy } from 'groupmq/strategies'
+
+const strategy = new PriorityStrategy()
+strategy.setPriority('vip:user:1', 100)      // VIP: process first
+strategy.setPriority('standard:user:2', 10)  // Standard: process second
+
+const worker = new Worker({
+  queue,
+  strategy,
+  handler: async (job) => { /* ... */ },
+})
+```
+
+See [Dispatch Strategies](/docs/dispatch-strategies) for advanced patterns.
+
+## Parent-Child Flows
+
+Create atomic parent-child job relationships where parent tasks wait for all children to complete, with automatic result collection.
+
+```ts
+await queue.addFlow({
+  parent: { groupId: 'workflows', data: { id: 'flow:1' } },
+  children: [
+    { groupId: 'item:1', data: { itemId: 1 } },
+    { groupId: 'item:2', data: { itemId: 2 } },
+    { groupId: 'item:3', data: { itemId: 3 } },
+  ],
+})
+
+// Parent handler receives all child results
+new Worker({
+  queue,
+  handler: async (job) => {
+    if (job.parentId === undefined) {
+      // Parent job - all children are done
+      const results = await job.getChildrenValues()
+      console.log('Aggregated results:', results)
+    }
+  },
+})
+```
+
+See [Parent-Child Flows](/docs/parent-child-flows) for fan-out patterns and result aggregation.
+
+## Custom Group Concurrency
+
+Override the default one-job-per-group limit to allow different concurrency for different groups. Optimize resource allocation across customer tiers or workload types.
+
+```ts
+// VIP users: 5 parallel jobs per group
+await queue.setGroupConcurrency('vip:user:1', 5)
+
+// Standard users: 1 at a time (default)
+await queue.setGroupConcurrency('standard:user:2', 1)
+
+// Batch processing: 3 parallel
+await queue.setGroupConcurrency('batch:processor', 3)
+```
+
+See [Group Concurrency](/docs/group-concurrency) for resource allocation and tiered service examples.
+
 ## Order by Timestamp (`orderMs`)
 
 If `orderMs` is provided, GroupMQ respects this timestamp to ensure jobs are processed in the correct order, even when producers are slightly out of sync. You can also set a global `orderingDelayMs` on the queue to add a small delay that improves strict ordering.

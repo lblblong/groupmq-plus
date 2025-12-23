@@ -15,6 +15,10 @@ local maxAttempts = ARGV[10]
 
 local jobKey = ns .. ":job:" .. jobId
 
+-- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
+local parentId = redis.call("HGET", jobKey, "parentId")
+-- [PHASE 3 MODIFICATION END]
+
 -- Verify job exists and check current status to prevent race conditions
 local currentStatus = redis.call("HGET", jobKey, "status")
 if not currentStatus then
@@ -29,6 +33,42 @@ if currentStatus == "waiting" then
   -- Ignore this late completion to prevent corruption
   return 0
 end
+
+-- [PHASE 3 MODIFICATION START: Update Flow Parent]
+-- Regardless of whether the job succeeded or failed, if it's finished, update parent
+if parentId then
+  local parentKey = ns .. ":job:" .. parentId
+  -- 1. Store child result in a separate hash to define parent's "childrenValues"
+  -- Key: flow:results:{parentId}, Field: {childId}
+  local flowResultsKey = ns .. ":flow:results:" .. parentId
+  redis.call("HSET", flowResultsKey, jobId, resultOrError)
+  
+  -- 2. Decrement remaining counter
+  local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)
+  
+  -- 3. If all children done, move parent to waiting
+  if remaining <= 0 then
+    local parentStatus = redis.call("HGET", parentKey, "status")
+    if parentStatus == "waiting-children" then
+      redis.call("HSET", parentKey, "status", "waiting")
+      
+      local parentGroupId = redis.call("HGET", parentKey, "groupId")
+      local parentScore = tonumber(redis.call("HGET", parentKey, "score")) or (tonumber(redis.call("TIME")[1]) * 1000)
+      
+      local pGZ = ns .. ":g:" .. parentGroupId
+      redis.call("ZADD", pGZ, parentScore, parentId)
+      redis.call("SADD", ns .. ":groups", parentGroupId)
+      
+      -- Add to ready if head
+      local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
+      if pHead and #pHead >= 2 then
+         local pHeadScore = tonumber(pHead[2])
+         redis.call("ZADD", ns .. ":ready", pHeadScore, parentGroupId)
+      end
+    end
+  end
+end
+-- [PHASE 3 MODIFICATION END]
 
 if status == "completed" then
   local completedKey = ns .. ":completed"

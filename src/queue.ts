@@ -228,6 +228,50 @@ export type RepeatOptions =
     };
 
 /**
+ * Options for a single job in a flow
+ */
+export type FlowJob<T = any> = {
+  /**
+   * Unique ID for the job. If not provided, a UUID will be generated.
+   */
+  jobId?: string;
+  /**
+   * Group ID for the job.
+   */
+  groupId: string;
+  /**
+   * Data for the job.
+   */
+  data: T;
+  /**
+   * Maximum number of retry attempts.
+   */
+  maxAttempts?: number;
+  /**
+   * Delay in milliseconds before the job becomes available.
+   */
+  delay?: number;
+  /**
+   * Priority/Order timestamp.
+   */
+  orderMs?: number;
+};
+
+/**
+ * Options for creating a parent-child flow
+ */
+export type FlowOptions<PT = any, CT = any> = {
+  /**
+   * The parent job that will be triggered after all children complete.
+   */
+  parent: FlowJob<PT>;
+  /**
+   * List of child jobs that must complete before the parent starts.
+   */
+  children: FlowJob<CT>[];
+};
+
+/**
  * Options for adding a job to the queue
  *
  * @template T The type of data to store in the job
@@ -529,6 +573,112 @@ export class Queue<T = any> {
       orderMs,
       delayMs,
     });
+  }
+
+  /**
+   * Adds a parent-child flow to the queue.
+   * The parent job will only be processed after all child jobs have completed successfully.
+   * This operation is atomic.
+   *
+   * @param flow The flow configuration containing parent and children jobs
+   * @returns The parent job entity
+   */
+  async addFlow<PT = any, CT = any>(
+    flow: FlowOptions<PT, CT>,
+  ): Promise<JobEntity<PT>> {
+    const parentId = flow.parent.jobId ?? randomUUID();
+    const parentMaxAttempts =
+      flow.parent.maxAttempts ?? this.defaultMaxAttempts;
+    const parentOrderMs = flow.parent.orderMs ?? Date.now();
+    const parentData = JSON.stringify(
+      flow.parent.data === undefined ? null : flow.parent.data,
+    );
+
+    const childrenIds: string[] = [];
+    const childrenArgs: string[] = [];
+
+    for (const child of flow.children) {
+      const childId = child.jobId ?? randomUUID();
+      const childMaxAttempts = child.maxAttempts ?? this.defaultMaxAttempts;
+      const childOrderMs = child.orderMs ?? Date.now();
+      const childDelay = child.delay ?? 0;
+      const childData = JSON.stringify(
+        child.data === undefined ? null : child.data,
+      );
+
+      childrenIds.push(childId);
+      childrenArgs.push(
+        childId,
+        child.groupId,
+        childData,
+        childMaxAttempts.toString(),
+        childOrderMs.toString(),
+        childDelay.toString(),
+      );
+    }
+
+    const now = Date.now();
+
+    // KEYS: [ns]
+    // ARGV: [parentId, parentGroupId, parentData, parentMaxAttempts, parentOrderMs, now, ...childrenArgs]
+    await evalScript(
+      this.r,
+      'enqueue-flow',
+      [
+        this.ns,
+        parentId,
+        flow.parent.groupId,
+        parentData,
+        parentMaxAttempts.toString(),
+        parentOrderMs.toString(),
+        now.toString(),
+        ...childrenArgs,
+      ],
+      1,
+    );
+
+    return new JobEntity({
+      queue: this as any,
+      id: parentId,
+      groupId: flow.parent.groupId,
+      data: flow.parent.data,
+      status: 'waiting-children',
+      attemptsMade: 0,
+      opts: { attempts: parentMaxAttempts },
+      timestamp: now,
+      orderMs: parentOrderMs,
+    });
+  }
+
+  /**
+   * Gets the number of remaining child jobs for a parent job in a flow.
+   * @param parentId The ID of the parent job
+   * @returns The number of remaining children, or null if the job is not a parent
+   */
+  async getFlowDependencies(parentId: string): Promise<number | null> {
+    const remaining = await this.r.hget(
+      `${this.ns}:job:${parentId}`,
+      'flowRemaining',
+    );
+    return remaining !== null ? parseInt(remaining, 10) : null;
+  }
+
+  /**
+   * Gets the results of all child jobs in a flow.
+   * @param parentId The ID of the parent job
+   * @returns An object mapping child job IDs to their results
+   */
+  async getFlowResults(parentId: string): Promise<Record<string, any>> {
+    const results = await this.r.hgetall(`${this.ns}:flow:results:${parentId}`);
+    const parsed: Record<string, any> = {};
+    for (const [id, val] of Object.entries(results)) {
+      try {
+        parsed[id] = JSON.parse(val);
+      } catch (_e) {
+        parsed[id] = val;
+      }
+    }
+    return parsed;
   }
 
   private async addSingle(opts: {
@@ -1491,7 +1641,7 @@ export class Queue<T = any> {
    * Reserve a job from a specific group atomically (eliminates race conditions)
    * @param groupId - The group to reserve from
    */
-  async reserveAtomic(groupId: string): Promise<ReservedJob<T> | null> {
+  public async reserveAtomic(groupId: string): Promise<ReservedJob<T> | null> {
     const now = Date.now();
 
     const result = await evalScript<string | null>(
@@ -1533,6 +1683,89 @@ export class Queue<T = any> {
       score: parseFloat(score),
       deadlineAt: parseInt(deadline, 10),
     };
+  }
+
+  /**
+   * 获取处于 Ready 状态的 Group 列表
+   * @param start 
+   * @param end 
+   */
+  async getReadyGroups(start = 0, end = -1): Promise<string[]> {
+    // groupmq:{ns}:ready 是一个 ZSET，存储 groupId
+    return this.r.zrange(`${this.ns}:ready`, start, end);
+  }
+
+  /**
+   * 设置组的元数据 (优先级/并发度)
+   * 我们将使用 Hash 存储这些配置: groupmq:{ns}:config:{groupId}
+   */
+  async setGroupConfig(
+    groupId: string,
+    config: { priority?: number; concurrency?: number },
+  ): Promise<void> {
+    const key = `${this.ns}:config:${groupId}`;
+    const args: string[] = [];
+    if (config.priority !== undefined) args.push('priority', String(config.priority));
+    if (config.concurrency !== undefined)
+      args.push('concurrency', String(config.concurrency));
+
+    if (args.length > 0) {
+      await this.r.hset(key, ...args);
+    }
+  }
+
+  async getGroupConfig(
+    groupId: string,
+  ): Promise<{ priority: number; concurrency: number }> {
+    const key = `${this.ns}:config:${groupId}`;
+    const [p, c] = await this.r.hmget(key, 'priority', 'concurrency');
+    return {
+      priority: p ? parseInt(p, 10) : 1, // 默认优先级 1
+      concurrency: c ? parseInt(c, 10) : 1, // 默认并发 1
+    };
+  }
+
+  /**
+   * 设置指定组的并发上限
+   * @param groupId 组 ID
+   * @param limit 并发数 (必须 >= 1)
+   */
+  async setGroupConcurrency(groupId: string, limit: number): Promise<void> {
+    const validLimit = Math.max(1, Math.floor(limit));
+    await this.r.hset(
+      `${this.ns}:config:${groupId}`,
+      'concurrency',
+      String(validLimit),
+    );
+  }
+
+  /**
+   * 获取指定组的并发上限
+   */
+  async getGroupConcurrency(groupId: string): Promise<number> {
+    const val = await this.r.hget(
+      `${this.ns}:config:${groupId}`,
+      'concurrency',
+    );
+    return val ? parseInt(val, 10) : 1;
+  }
+
+  /**
+   * 获取组内最老任务的入队时间戳
+   * 用于 PriorityStrategy 的 aging 算法
+   * @param groupId 组 ID
+   * @returns 最老任务的时间戳，如果组为空则返回 undefined
+   */
+  async getGroupOldestTimestamp(groupId: string): Promise<number | undefined> {
+    const gZ = `${this.ns}:g:${groupId}`;
+    // 获取组内第一个任务（score 最小的）
+    const result = await this.r.zrange(gZ, 0, 0);
+    if (!result || result.length === 0) {
+      return undefined;
+    }
+    const jobId = result[0];
+    const timestamp = await this.r.hget(`${this.ns}:job:${jobId}`, 'timestamp');
+    return timestamp ? parseInt(timestamp, 10) : undefined;
   }
 
   /**

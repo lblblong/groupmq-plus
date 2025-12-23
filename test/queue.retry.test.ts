@@ -1,22 +1,20 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Retry Behavior Tests', () => {
   const namespace = `test:retry:${Date.now()}`;
 
   afterAll(async () => {
     // Cleanup after all tests
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should respect maxAttempts and move to dead letter queue', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({
       redis,
       namespace: `${namespace}:dlq`,
@@ -59,7 +57,7 @@ describe('Retry Behavior Tests', () => {
   });
 
   it('should use exponential backoff correctly', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:backoff` });
 
     await q.add({
@@ -108,7 +106,7 @@ describe('Retry Behavior Tests', () => {
   });
 
   it('should handle mixed success/failure in same group', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:mixed` });
 
     // Enqueue multiple jobs in same group
@@ -157,7 +155,7 @@ describe('Retry Behavior Tests', () => {
   });
 
   it('should handle retry with different error types', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:errors` });
 
     await q.add({ groupId: 'error-group', data: { errorType: 'timeout' } });
@@ -212,7 +210,7 @@ describe('Retry Behavior Tests', () => {
   });
 
   it('should maintain FIFO order during retries with multiple groups', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:multigroup` });
 
     // Create jobs in two groups with interleaved order

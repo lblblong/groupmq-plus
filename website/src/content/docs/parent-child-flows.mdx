@@ -1,0 +1,321 @@
+---
+title: Parent-Child Flows
+description: Create parent-child job relationships with atomic flow processing and result collection.
+---
+
+## Overview
+
+GroupMQ supports **parent-child flows** (also called "flow" or "work flows") to coordinate complex multi-step job pipelines. A parent job can spawn multiple child jobs that execute in parallel, and the parent automatically triggers once all children complete.
+
+This is useful for:
+- **Fan-out patterns**: One task spawns many subtasks (e.g., processing individual items from a bulk operation)
+- **Result aggregation**: Collect results from parallel tasks and process them together
+- **Workflow coordination**: Multi-stage pipelines where later stages depend on earlier completion
+- **Atomic chains**: Parent tasks only start after all children finish, guaranteed
+
+## Key Features
+
+- **Atomic creation**: Parent and children are created atomically in a single Lua transaction
+- **Parallel execution**: Children execute simultaneously across available workers
+- **Automatic triggering**: Parent queues automatically when all children complete (success or failure)
+- **Result collection**: Parent can read all child job results and failures
+- **Zero worker code**: Flow logic is transparent to worker handlers
+
+## How It Works
+
+When you create a flow:
+
+1. **Parent created in "waiting-children" state** - Not queued yet, waiting for children
+2. **Children created and queued normally** - Each child is a regular job with a `parentId` link
+3. **Children process independently** - Standard worker processing, no special handling needed
+4. **Completion triggers parent** - When last child completes, parent auto-queues
+5. **Parent processes results** - Parent handler can read child results and failures
+
+## Basic Example
+
+```ts
+import { Queue, Worker } from 'groupmq'
+
+const redis = new Redis()
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Create a parent job with child jobs
+await queue.addFlow({
+  parent: {
+    groupId: 'workflows',
+    data: { workflowId: '123', type: 'bulk-process' },
+  },
+  children: [
+    { groupId: 'item:1', data: { itemId: 1, action: 'process' } },
+    { groupId: 'item:2', data: { itemId: 2, action: 'process' } },
+    { groupId: 'item:3', data: { itemId: 3, action: 'process' } },
+  ],
+})
+
+// Worker processes children normally (no flow-specific code needed)
+const childWorker = new Worker({
+  queue,
+  handler: async (job) => {
+    if (job.groupId.startsWith('item:')) {
+      const { itemId, action } = job.data
+      console.log(`Processing item ${itemId} with action ${action}`)
+      return { itemId, status: 'completed' }
+    }
+  },
+})
+
+// Worker processes parent after all children complete
+const parentWorker = new Worker({
+  queue,
+  handler: async (job) => {
+    const { workflowId, type } = job.data
+
+    // Get all child results
+    const childResults = await job.getChildrenValues()
+    console.log('All children completed:', childResults)
+
+    // Aggregate results
+    const successCount = childResults.filter(r => r?.status === 'completed').length
+    console.log(`Workflow ${workflowId}: ${successCount} items processed`)
+
+    return { workflowId, result: 'aggregated' }
+  },
+})
+
+childWorker.run()
+parentWorker.run()
+```
+
+## Monitoring Child Progress
+
+```ts
+import { Queue, Worker } from 'groupmq'
+
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Create flow
+const flowId = await queue.addFlow({
+  parent: { groupId: 'aggregation', data: { id: 'flow1' } },
+  children: Array.from({ length: 100 }, (_, i) => ({
+    groupId: `task:${i}`,
+    data: { taskIndex: i },
+  })),
+})
+
+// Monitor progress
+setInterval(async () => {
+  const parent = await queue.getJob(flowId.parentId)
+  if (parent?.state === 'waiting-children') {
+    const activeCount = await queue.getActiveCount()
+    const waitingCount = await queue.getWaitingCount()
+    console.log(`Parent waiting. Active: ${activeCount}, Waiting: ${waitingCount}`)
+  } else if (parent?.state === 'completed') {
+    console.log('Parent completed!')
+  }
+}, 1000)
+```
+
+## Error Handling
+
+By default, flows wait for all children to complete regardless of success/failure:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+await queue.addFlow({
+  parent: { groupId: 'workflows', data: { id: 'flow1' } },
+  children: [
+    { groupId: 'task:1', data: { willFail: false } },
+    { groupId: 'task:2', data: { willFail: true } },  // This will fail
+    { groupId: 'task:3', data: { willFail: false } },
+  ],
+})
+
+// Parent handler runs even though task:2 failed
+const worker = new Worker({
+  queue,
+  handler: async (job) => {
+    if (job.parentId) {
+      // Child job
+      if (job.data.willFail) throw new Error('Task failed')
+      return { taskStatus: 'ok' }
+    } else {
+      // Parent job - children are done (all of them, even failed ones)
+      const results = await job.getChildrenValues()
+      // results includes both successes and failures
+      const failures = results.filter(r => r instanceof Error)
+      console.log(`${failures.length} children failed, handling gracefully`)
+    }
+  },
+})
+```
+
+## Advanced: Async Child Generation
+
+If you need to generate children dynamically (not all upfront), you can:
+
+1. Create parent without initial children
+2. Spawn children as you discover them
+3. Let parent wait for all to complete
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Create parent
+const parent = await queue.add({
+  groupId: 'workflows',
+  data: { id: 'flow1', state: 'awaiting-children' },
+})
+
+// Later, add children with parentId reference
+await queue.add({
+  groupId: 'subtask:1',
+  data: { index: 1 },
+  // Note: parentId is set in the job, linking it to parent
+  // (This would need to be added to the addFlow signature)
+})
+
+// Parent handler waits for all children
+await new Worker({
+  queue,
+  handler: async (job) => {
+    if (job.parentId === undefined && job.data.state === 'awaiting-children') {
+      // Parent - wait for results
+      const results = await job.getChildrenValues()
+      console.log('All children done:', results)
+    }
+  },
+}).run()
+```
+
+## API Reference
+
+### Queue.addFlow(opts)
+
+Create a parent job and its children atomically.
+
+```ts
+const result = await queue.addFlow({
+  parent: {
+    groupId: string,
+    data: any,
+    jobId?: string,        // Optional: set parent job ID
+    delay?: number,        // Optional: delay before parent queues
+  },
+  children: Array<{
+    groupId: string,
+    data: any,
+    jobId?: string,        // Optional: set child job ID
+    delay?: number,        // Optional: delay before child queues
+  }>,
+})
+
+// Returns
+// {
+//   parentId: string,      // Parent job ID
+//   childIds: string[],    // Child job IDs
+// }
+```
+
+### Queue.getFlowDependencies(parentId)
+
+Get the number of remaining child jobs for a parent job.
+
+```ts
+const remaining = await queue.getFlowDependencies(parentId)
+// Returns: number | null
+// - number: count of children not yet completed
+// - null: if the job is not a parent job
+
+// Example: Monitor flow progress
+const total = 10 // You track this when creating the flow
+const remaining = await queue.getFlowDependencies(parentId)
+if (remaining !== null) {
+  const completed = total - remaining
+  console.log(`Progress: ${completed}/${total} children completed`)
+}
+```
+
+### Queue.getFlowResults(parentId)
+
+Get the results of all completed child jobs in a flow.
+
+```ts
+const results = await queue.getFlowResults(parentId)
+// Returns: Record<string, any>
+// - Keys are child job IDs
+// - Values are the return values from child job handlers
+
+// Example: Aggregate child results in parent handler
+const worker = new Worker({
+  queue,
+  handler: async (job) => {
+    // Check if this is a parent job
+    const remaining = await queue.getFlowDependencies(job.id)
+    if (remaining === 0) {
+      // All children completed, get their results
+      const childResults = await queue.getFlowResults(job.id)
+      
+      // Process results
+      const successCount = Object.values(childResults)
+        .filter(r => r?.status === 'success').length
+      
+      return { totalChildren: Object.keys(childResults).length, successCount }
+    }
+  },
+})
+```
+
+### Job.getChildrenValues()
+
+Get all child job results and failures.
+
+```ts
+const parentWorker = new Worker({
+  queue,
+  handler: async (job) => {
+    if (!job.parentId) {
+      // This is a parent job
+      const childResults = await job.getChildrenValues()
+      // Returns array of:
+      // - { ...child result data } for successful children
+      // - Error object for failed children
+      // - null for children that didn't return a value
+    }
+  },
+})
+```
+
+## Combining with Group Concurrency
+
+Control how many children can run in parallel per group:
+
+```ts
+const queue = new Queue({ redis, namespace: 'app' })
+
+// Each item group can process only 2 items concurrently
+await queue.setGroupConcurrency('item:*', 2)
+
+await queue.addFlow({
+  parent: { groupId: 'workflows', data: { id: 'flow1' } },
+  children: Array.from({ length: 100 }, (_, i) => ({
+    groupId: `item:${Math.floor(i / 10)}`, // Group children
+    data: { index: i },
+  })),
+})
+```
+
+## Performance Notes
+
+- **Atomic creation**: Parent and children are created in a single Lua transaction
+- **No scheduler needed**: Flow execution is purely event-driven
+- **Scalable**: Parent waits efficiently without polling or busy-waiting
+- **Memory efficient**: Flow state is stored in Redis, not in-process
+
+## Limitations & Future Enhancements
+
+- Currently, parent triggers once when all children complete (no partial/stream processing)
+- Result collection requires calling `getChildrenValues()` (bulk operation, not streaming)
+- Nested flows not yet supported (parent-child-grandchild chains)
+
+Consider these for complex workflows or reach out on GitHub for feature requests!

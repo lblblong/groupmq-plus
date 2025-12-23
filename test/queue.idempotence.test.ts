@@ -1,21 +1,19 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Idempotent enqueue with optional jobId', () => {
   const namespace = `test:idempotence:${Date.now()}`;
 
   afterAll(async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should ignore duplicate adds with the same jobId and return same id', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:dedupe` });
 
     const customId = 'my-fixed-id';
@@ -55,7 +53,7 @@ describe('Idempotent enqueue with optional jobId', () => {
   });
 
   it('should generate a UUID when jobId is not provided', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:uuid` });
 
     const job = await q.add({ groupId: 'g1', data: { a: 1 } });
@@ -84,7 +82,7 @@ describe('Idempotent enqueue with optional jobId', () => {
   });
 
   it('should allow reuse of jobId after job is removed by retention', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const q = new Queue({
       redis,
       namespace: `${namespace}:reuse`,

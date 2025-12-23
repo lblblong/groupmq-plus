@@ -2,6 +2,7 @@ import { AsyncFifoQueue } from './async-fifo-queue';
 import { Job } from './job';
 import { Logger, type LoggerInterface } from './logger';
 import type { AddOptions, Queue, ReservedJob } from './queue';
+import { DispatchStrategy } from './strategies/dispatch-strategy';
 
 export type BackoffStrategy = (attempt: number) => number; // ms
 
@@ -282,6 +283,19 @@ export type WorkerOptions<T> = {
    * - Strict timing: Keep at 0
    */
   stalledGracePeriod?: number;
+
+  /**
+   * 自定义调度策略。如果设置，Worker 将忽略默认的 FIFO 调度，
+   * 转而使用策略轮询模式。
+   */
+  strategy?: DispatchStrategy;
+
+  /**
+   * 策略模式下的轮询间隔 (ms)
+   * 当使用 Strategy 时，我们无法使用阻塞读取 (BZPOPMIN)，必须退化为短轮询
+   * @default 50
+   */
+  strategyPollInterval?: number;
 };
 
 const defaultBackoff: BackoffStrategy = (attempt) => {
@@ -298,6 +312,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   private hbMs: number;
   private onError?: WorkerOptions<T>['onError'];
   private stopping = false;
+  private opts: WorkerOptions<T>;
   private ready = false;
   private closed = false;
   private maxAttempts: number;
@@ -342,6 +357,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       throw new Error('Worker handler must be a function');
     }
 
+    this.opts = opts;
     this.q = opts.queue;
     this.name = opts.name ?? this.q.name;
     this.logger =
@@ -441,6 +457,8 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
   private async _runLoop(): Promise<void> {
     this.logger.info(`🚀 Worker ${this.name} starting...`);
+    const strategyPollInterval = this.opts.strategyPollInterval ?? 50;
+
     // Dedicated blocking client per worker with auto-pipelining to reduce contention
     try {
       this.blockingClient = this.q.redis.duplicate({
@@ -545,51 +563,82 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
             `Fetching job (call #${this.blockingStats.totalBlockingCalls}, processing: ${this.jobsInProgress.size}/${this.concurrency}, queue: ${asyncFifoQueue.numTotal()} (queued: ${asyncFifoQueue.numQueued()}, pending: ${asyncFifoQueue.numPending()}), total: ${asyncFifoQueue.numTotal()}/${this.concurrency})...`,
           );
 
-          // Try batch reserve first for better efficiency
-          // Use batch reserve even for concurrency=1 since it's more efficient than blocking+atomic
-          // But limit batch size to available concurrency capacity
-          // Only batch reserve when queue is empty (process existing jobs first)
-          const availableCapacity =
-            this.concurrency - asyncFifoQueue.numTotal();
-          if (availableCapacity > 0 && asyncFifoQueue.numTotal() === 0) {
-            const batchSize = Math.min(availableCapacity, 8); // Cap at 8 for efficiency
-            const batchJobs = await this.q.reserveBatch(batchSize);
+          let fetchedJob: Promise<ReservedJob<T> | null>;
 
-            if (batchJobs.length > 0) {
-              this.logger.debug(`Batch reserved ${batchJobs.length} jobs`);
-              for (const job of batchJobs) {
-                asyncFifoQueue.add(Promise.resolve(job));
+          if (this.opts.strategy) {
+            // A. 策略模式 (Polling)
+            fetchedJob = (async () => {
+              // 1. 询问策略：下一个该谁？
+              const targetGroupId = await this.opts.strategy!.getNextGroup(
+                this.q,
+              );
+
+              if (!targetGroupId) {
+                // 策略说没有合适的组，或者队列为空
+                // 等待一段时间再轮询，避免空转 CPU
+                await this.delay(strategyPollInterval);
+                return null;
               }
-              // Reset counters for successful batch
-              connectionRetries = 0;
-              this.lastJobPickupTime = Date.now();
-              this.blockingStats.consecutiveEmptyReserves = 0;
-              this.blockingStats.lastActivityTime = Date.now();
-              this.emptyReserveBackoffMs = 0;
-              continue; // Skip individual reserve
+
+              // 2. 原子抢占：尝试从指定组拿任务
+              // 注意：这里可能会失败（比如并发满了，或者刚刚被别的 Worker 抢了）
+              const job = await this.q.reserveAtomic(targetGroupId);
+
+              if (!job) {
+                // 抢占失败，可能是竞争导致，稍作退避
+                // 也可以立即重试，取决于激进程度
+                return null;
+              }
+              return job;
+            })();
+          } else {
+            // B. 默认模式 (原有逻辑)
+            // Try batch reserve first for better efficiency
+            // Use batch reserve even for concurrency=1 since it's more efficient than blocking+atomic
+            // But limit batch size to available concurrency capacity
+            // Only batch reserve when queue is empty (process existing jobs first)
+            const availableCapacity =
+              this.concurrency - asyncFifoQueue.numTotal();
+            if (availableCapacity > 0 && asyncFifoQueue.numTotal() === 0) {
+              const batchSize = Math.min(availableCapacity, 8); // Cap at 8 for efficiency
+              const batchJobs = await this.q.reserveBatch(batchSize);
+
+              if (batchJobs.length > 0) {
+                this.logger.debug(`Batch reserved ${batchJobs.length} jobs`);
+                for (const job of batchJobs) {
+                  asyncFifoQueue.add(Promise.resolve(job));
+                }
+                // Reset counters for successful batch
+                connectionRetries = 0;
+                this.lastJobPickupTime = Date.now();
+                this.blockingStats.consecutiveEmptyReserves = 0;
+                this.blockingStats.lastActivityTime = Date.now();
+                this.emptyReserveBackoffMs = 0;
+                continue; // Skip individual reserve
+              }
             }
+
+            // BullMQ-style: only perform blocking reserve when truly drained
+            // Require 2 consecutive empty reserves before considering queue drained
+            // This prevents false positives from worker competition while staying responsive
+            // Check both queued/pending jobs AND actively processing jobs
+            const allowBlocking =
+              this.blockingStats.consecutiveEmptyReserves >= 2 &&
+              asyncFifoQueue.numTotal() === 0 &&
+              this.jobsInProgress.size === 0;
+
+            // Use a consistent blocking timeout - BullMQ style
+            // Job completion resets consecutiveEmptyReserves to 0, ensuring fast pickup
+            const adaptiveTimeout = this.blockingTimeoutSec;
+
+            fetchedJob = allowBlocking
+              ? this.q.reserveBlocking(
+                  adaptiveTimeout,
+                  undefined, // blockUntil removed (was always 0, dead code)
+                  this.blockingClient ?? undefined,
+                )
+              : this.q.reserve();
           }
-
-          // BullMQ-style: only perform blocking reserve when truly drained
-          // Require 2 consecutive empty reserves before considering queue drained
-          // This prevents false positives from worker competition while staying responsive
-          // Check both queued/pending jobs AND actively processing jobs
-          const allowBlocking =
-            this.blockingStats.consecutiveEmptyReserves >= 2 &&
-            asyncFifoQueue.numTotal() === 0 &&
-            this.jobsInProgress.size === 0;
-
-          // Use a consistent blocking timeout - BullMQ style
-          // Job completion resets consecutiveEmptyReserves to 0, ensuring fast pickup
-          const adaptiveTimeout = this.blockingTimeoutSec;
-
-          const fetchedJob = allowBlocking
-            ? this.q.reserveBlocking(
-                adaptiveTimeout,
-                undefined, // blockUntil removed (was always 0, dead code)
-                this.blockingClient ?? undefined,
-              )
-            : this.q.reserve();
 
           asyncFifoQueue.add(fetchedJob);
 
@@ -604,10 +653,20 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
             this.blockingStats.lastActivityTime = Date.now();
             this.emptyReserveBackoffMs = 0; // Reset backoff when we get a job
 
-            this.logger.debug(
-              `Fetched job ${job.id} from group ${job.groupId}`,
-            );
+            this.logger.debug(`Fetched job ${job.id} from group ${job.groupId}`);
           } else {
+            // 注意：策略模式下，如果 job 为 null，需要处理空转等待
+            if (this.opts.strategy) {
+              // 如果是策略模式，且没拿任务，break 出去让 loop 重新转，
+              // 这样可以检查 stopping 状态，并在上面的闭包里已经做了 delay
+              if (
+                asyncFifoQueue.numTotal() === 0 &&
+                this.jobsInProgress.size === 0
+              ) {
+                break;
+              }
+            }
+
             // No more jobs available - increment counter
             this.blockingStats.consecutiveEmptyReserves++;
 

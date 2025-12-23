@@ -1,22 +1,20 @@
-import Redis from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';
 import { getWorkersStatus, Queue, Worker } from '../src';
-
-const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+import { createRedis } from './helpers/redis';
 
 describe('Graceful Shutdown Tests', () => {
   const namespace = `test:graceful:${Date.now()}`;
 
   afterAll(async () => {
     // Cleanup after all tests
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const keys = await redis.keys(`${namespace}*`);
     if (keys.length) await redis.del(keys);
     await redis.quit();
   });
 
   it('should track active job count correctly', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:count` });
 
     // Initially should be 0
@@ -70,7 +68,7 @@ describe('Graceful Shutdown Tests', () => {
   });
 
   it('should wait for queue to empty', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:empty` });
 
     // Should return true immediately if already empty
@@ -118,7 +116,7 @@ describe('Graceful Shutdown Tests', () => {
   });
 
   it('should track current job in worker', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:current` });
 
     let jobStarted = false;
@@ -174,7 +172,7 @@ describe('Graceful Shutdown Tests', () => {
   });
 
   it('should stop worker gracefully', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:graceful` });
 
     let jobStarted = false;
@@ -214,7 +212,7 @@ describe('Graceful Shutdown Tests', () => {
   });
 
   it('should timeout graceful stop if job takes too long', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:timeout` });
 
     let jobStarted = false;
@@ -262,7 +260,7 @@ describe('Graceful Shutdown Tests', () => {
   });
 
   it('should get workers status correctly', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:status` });
 
     let job1Started = false;
@@ -356,7 +354,7 @@ describe('Graceful Shutdown Tests', () => {
   // NEW TESTS REQUESTED BY USER
 
   it('should finish long-running job before stopping worker (graceful shutdown)', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:longrunning` });
 
     // Add a long-running job
@@ -423,7 +421,7 @@ describe('Graceful Shutdown Tests', () => {
   }, 8000); // 8 second timeout for the test (reduced)
 
   it('should not pick up new jobs after shutdown is initiated', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:nonewjobs` });
 
     // Add multiple jobs
@@ -487,7 +485,7 @@ describe('Graceful Shutdown Tests', () => {
   }, 10000); // 10 second timeout for the test
 
   it('should shutdown gracefully', async () => {
-    const redis = new Redis(REDIS_URL);
+    const redis = createRedis();
     const queue = new Queue({
       redis,
       logger: true,

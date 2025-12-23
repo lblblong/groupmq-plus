@@ -66,10 +66,14 @@ for i = 1, #groups, 2 do
   local gid = groups[i]
   local gZ = ns .. ":g:" .. gid
   local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+  local configKey = ns .. ":config:" .. gid
 
-  -- Check if group has no active jobs (BullMQ-style gating)
+  -- [PHASE 2 MODIFICATION START]
+  -- Check concurrency limit
   local activeCount = redis.call("LLEN", groupActiveKey)
-  if activeCount == 0 then
+  local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+  
+  if activeCount < limit then
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
       local headJobId = head[1]
@@ -98,7 +102,7 @@ for i = 1, #groups, 2 do
               redis.call("ZADD", readyKey, nextScore, gid)
             end
           else
-            -- Push to group active list (enforces 1-per-group)
+            -- Push to group active list
             redis.call("LPUSH", groupActiveKey, jobId)
             
             -- Mark job as processing
@@ -123,6 +127,7 @@ for i = 1, #groups, 2 do
       end
     end
   end
+  -- [PHASE 2 MODIFICATION END]
   -- Note: Groups with active jobs will be skipped
 end
 
