@@ -414,6 +414,11 @@ function safeJsonParse(input: string): any {
   }
 }
 
+type JobWaiter = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+};
+
 export class Queue<T = any> {
   private logger: LoggerInterface;
   private r: Redis;
@@ -431,6 +436,11 @@ export class Queue<T = any> {
 
   // Internal tracking for adaptive behavior
   private _consecutiveEmptyReserves = 0;
+
+  // Pub/Sub for job lifecycle events
+  private subscriber?: Redis;
+  private eventsSubscribed = false;
+  private waitingJobs: Map<string, JobWaiter[]> = new Map();
 
   // Promoter service for staging system
   private promoterRedis?: Redis;
@@ -1864,6 +1874,133 @@ export class Queue<T = any> {
     return JobEntity.fromStore<T>(this, id);
   }
 
+  private async setupSubscriber(): Promise<void> {
+    if (this.eventsSubscribed && this.subscriber) return;
+
+    if (!this.subscriber) {
+      this.subscriber = this.r.duplicate();
+      this.subscriber.on('message', (channel, message) => {
+        if (channel === `${this.ns}:events`) {
+          this.handleJobEvent(message);
+        }
+      });
+      this.subscriber.on('error', (err) => {
+        this.logger.error('Redis error (events subscriber):', err);
+      });
+    }
+
+    await this.subscriber.subscribe(`${this.ns}:events`);
+    this.eventsSubscribed = true;
+  }
+
+  private handleJobEvent(message: string): void {
+    try {
+      const event = safeJsonParse(message);
+      if (!event || typeof event.id !== 'string') return;
+
+      const waiters = this.waitingJobs.get(event.id);
+      if (!waiters || waiters.length === 0) return;
+
+      if (event.status === 'completed') {
+        const parsed =
+          typeof event.result === 'string'
+            ? safeJsonParse(event.result) ?? event.result
+            : event.result;
+        waiters.forEach((w) => w.resolve(parsed));
+      } else if (event.status === 'failed') {
+        const info =
+          typeof event.result === 'string'
+            ? safeJsonParse(event.result) ?? {}
+            : event.result ?? {};
+        const err = new Error(
+          (info && (info.message as string)) || 'Job failed',
+        );
+        if (info && typeof info === 'object') {
+          if (typeof (info as any).name === 'string') {
+            err.name = (info as any).name;
+          }
+          if (typeof (info as any).stack === 'string') {
+            err.stack = (info as any).stack;
+          }
+        }
+        waiters.forEach((w) => w.reject(err));
+      }
+
+      this.waitingJobs.delete(event.id);
+    } catch (err) {
+      this.logger.error('Failed to process job event:', err as Error);
+    }
+  }
+
+  /**
+   * Wait for a job to complete or fail, similar to BullMQ's waitUntilFinished.
+   */
+  async waitUntilFinished(jobId: string, timeoutMs = 0): Promise<unknown> {
+    const job = await this.getJob(jobId);
+    const state = await job.getState();
+
+    if (state === 'completed') {
+      return job.returnvalue;
+    }
+    if (state === 'failed') {
+      throw new Error(job.failedReason || 'Job failed');
+    }
+
+    await this.setupSubscriber();
+
+    return new Promise((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      let waiter: JobWaiter;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        const current = this.waitingJobs.get(jobId);
+        if (!current) return;
+        const remaining = current.filter((w) => w !== waiter);
+        if (remaining.length === 0) this.waitingJobs.delete(jobId);
+        else this.waitingJobs.set(jobId, remaining);
+      };
+
+      const wrappedResolve = (value: unknown) => {
+        cleanup();
+        resolve(value);
+      };
+
+      const wrappedReject = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+
+      waiter = { resolve: wrappedResolve, reject: wrappedReject };
+
+      const waiters = this.waitingJobs.get(jobId) ?? [];
+      waiters.push(waiter);
+      this.waitingJobs.set(jobId, waiters);
+
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          wrappedReject(
+            new Error(`Timed out waiting for job ${jobId} to finish`),
+          );
+        }, timeoutMs);
+      }
+
+      void (async () => {
+        try {
+          const latest = await this.getJob(jobId);
+          const latestState = await latest.getState();
+          if (latestState === 'completed') {
+            wrappedResolve(latest.returnvalue);
+          } else if (latestState === 'failed') {
+            wrappedReject(new Error(latest.failedReason ?? 'Job failed'));
+          }
+        } catch (_err) {
+          // Job might have been cleaned up; rely on pub/sub event
+        }
+      })();
+    });
+  }
+
   /**
    * Fetch jobs by statuses, emulating BullMQ's Queue.getJobs API used by BullBoard.
    * Only getter functionality; ordering is best-effort.
@@ -2215,6 +2352,28 @@ export class Queue<T = any> {
 
     // Stop promoter
     await this.stopPromoter();
+
+    // Tear down event subscriber and reject pending waiters
+    if (this.subscriber) {
+      try {
+        await this.subscriber.unsubscribe(`${this.ns}:events`);
+        await this.subscriber.quit();
+      } catch (_err) {
+        try {
+          this.subscriber.disconnect();
+        } catch (_e) {}
+      }
+      this.subscriber = undefined;
+      this.eventsSubscribed = false;
+    }
+
+    if (this.waitingJobs.size > 0) {
+      const err = new Error('Queue closed');
+      this.waitingJobs.forEach((waiters) => {
+        waiters.forEach((w) => w.reject(err));
+      });
+      this.waitingJobs.clear();
+    }
 
     try {
       await this.r.quit();

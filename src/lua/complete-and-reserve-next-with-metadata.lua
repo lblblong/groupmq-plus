@@ -145,6 +145,14 @@ elseif status == "failed" then
   end
 end
 
+-- Publish completion/failure event for waiters
+local eventPayload = cjson.encode({
+  id = completedJobId,
+  status = status,
+  result = resultOrError
+})
+redis.call("PUBLISH", ns .. ":events", eventPayload)
+
 -- Part 3: Handle group active list and get next job (BullMQ-style)
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
 local activeJobId = redis.call("LINDEX", groupActiveKey, 0)

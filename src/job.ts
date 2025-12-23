@@ -102,6 +102,14 @@ export class Job<T = any> {
     await this.updateData(jobData);
   }
 
+  /**
+   * Wait until this job is completed or failed.
+   * @param timeoutMs Optional timeout in milliseconds (0 = no timeout)
+   */
+  async waitUntilFinished(timeoutMs = 0): Promise<unknown> {
+    return this.queue.waitUntilFinished(this.id, timeoutMs);
+  }
+
   static fromReserved<T = any>(
     queue: Queue<T>,
     reserved: ReservedJob<T>,

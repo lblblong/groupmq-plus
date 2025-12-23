@@ -139,5 +139,15 @@ elseif status == "failed" then
   end
 end
 
+-- Publish completion/failure event for waiters
+if status == "completed" or status == "failed" then
+  local eventPayload = cjson.encode({
+    id = jobId,
+    status = status,
+    result = resultOrError
+  })
+  redis.call("PUBLISH", ns .. ":events", eventPayload)
+end
+
 return 1
 

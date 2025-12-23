@@ -186,5 +186,13 @@ elseif status == "failed" then
   end
 end
 
+-- Publish completion/failure event for waiters
+local eventPayload = cjson.encode({
+  id = jobId,
+  status = status,
+  result = resultOrError
+})
+redis.call("PUBLISH", ns .. ":events", eventPayload)
+
 return 1
 
