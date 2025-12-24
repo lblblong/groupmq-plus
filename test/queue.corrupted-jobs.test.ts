@@ -26,8 +26,8 @@ describe('Corrupted/Missing Job Hash Tests', () => {
     const fakeJobId = 'fake-job-id-12345';
 
     // Manually create a corrupted state: job ID in group sorted set but no job hash
-    const gZ = `${queue.prefix}:g:${groupId}`;
-    const readyKey = `${queue.prefix}:ready`;
+    const gZ = `${queue.namespace}:g:${groupId}`;
+    const readyKey = `${queue.namespace}:ready`;
 
     // Add job ID to group sorted set
     await redis.zadd(gZ, 1000, fakeJobId);
@@ -71,11 +71,11 @@ describe('Corrupted/Missing Job Hash Tests', () => {
     const fakeJobId = 'fake-atomic-job';
 
     // Create corrupted state
-    const gZ = `${queue.prefix}:g:${groupId}`;
+    const gZ = `${queue.namespace}:g:${groupId}`;
     await redis.zadd(gZ, 1000, fakeJobId);
 
     // Add to ready queue
-    const readyKey = `${queue.prefix}:ready`;
+    const readyKey = `${queue.namespace}:ready`;
     await redis.zadd(readyKey, 1000, groupId);
 
     let concatenationError = false;

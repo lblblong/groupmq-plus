@@ -87,8 +87,8 @@ for i = 1, #groups, 2 do
     -- Group has capacity, try to get head job
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
-      local headJobId = head[1]
-      local headJobKey = ns .. ":job:" .. headJobId
+      local candidateJobId = head[1]
+      local headJobKey = ns .. ":job:" .. candidateJobId
       
       -- Skip if head job is delayed (will be promoted later)
       local jobStatus = redis.call("HGET", headJobKey, "status")
