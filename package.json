@@ -33,7 +33,7 @@
   },
   "scripts": {
     "dev": "tsdown --watch",
-    "build": "tsdown src/index.ts --format esm --format cjs --dts --sourcemap && node scripts/copy-lua.mjs",
+    "build": "tsdown",
     "prebuild": "pnpm test:lua",
     "test": "vitest run --no-file-parallelism",
     "test:lua": "node scripts/validate-lua-scripts.js",
@@ -82,6 +82,7 @@
     "pidusage": "^4.0.1",
     "pino": "^9.12.0",
     "pretty-ms": "^9.3.0",
+    "rollup-plugin-copy": "^3.5.0",
     "semantic-release": "^23.0.0",
     "tsdown": "^0.15.4",
     "typescript": "^5.6.2",
