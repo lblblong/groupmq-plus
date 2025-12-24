@@ -100,10 +100,10 @@ export type WorkerOptions<T> = {
 
   /**
    * The function that processes jobs. Must be async and handle job failures gracefully.
-   * @param job The reserved job to process
+   * @param job The Job instance to process, with access to all Job methods
    * @returns Promise that resolves when job is complete
    */
-  handler: (job: ReservedJob<T>) => Promise<unknown>;
+  handler: (job: Job<T>) => Promise<unknown>;
 
   /**
    * Heartbeat interval in milliseconds to keep jobs alive during processing.
@@ -122,9 +122,9 @@ export type WorkerOptions<T> = {
   /**
    * Error handler called when job processing fails or worker encounters errors
    * @param err The error that occurred
-   * @param job The job that failed (if applicable)
+   * @param job The Job instance that failed (if applicable)
    */
-  onError?: (err: unknown, job?: ReservedJob<T>) => void;
+  onError?: (err: unknown, job?: Job<T>) => void;
 
   /**
    * Maximum number of retry attempts for failed jobs at the worker level.
@@ -1153,7 +1153,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
    * Get information about the first currently processing job (if any)
    * For concurrency > 1, returns the oldest job in progress
    */
-  getCurrentJob(): { job: ReservedJob<T>; processingTimeMs: number } | null {
+  getCurrentJob(): { job: Job<T>; processingTimeMs: number } | null {
     if (this.jobsInProgress.size === 0) {
       return null;
     }
@@ -1162,7 +1162,10 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     const oldest = Array.from(this.jobsInProgress)[0];
     const now = Date.now();
     return {
-      job: oldest.job,
+      job: Job.fromReserved(this.q, oldest.job, {
+        processedOn: oldest.ts,
+        status: 'active',
+      }),
       processingTimeMs: now - oldest.ts,
     };
   }
@@ -1170,10 +1173,13 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   /**
    * Get information about all currently processing jobs
    */
-  getCurrentJobs(): Array<{ job: ReservedJob<T>; processingTimeMs: number }> {
+  getCurrentJobs(): Array<{ job: Job<T>; processingTimeMs: number }> {
     const now = Date.now();
     return Array.from(this.jobsInProgress).map((item) => ({
-      job: item.job,
+      job: Job.fromReserved(this.q, item.job, {
+        processedOn: item.ts,
+        status: 'active',
+      }),
       processingTimeMs: now - item.ts,
     }));
   }
@@ -1237,7 +1243,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
             );
           }
 
-          this.onError?.(e, job);
+          this.onError?.(e, Job.fromReserved(this.q, job, { status: 'active' }));
 
           // Only emit error if not a connection error during shutdown
           if (!isConnErr || !this.stopping) {
@@ -1261,8 +1267,14 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
         startHeartbeat();
       }, heartbeatThreshold);
 
-      // Execute the user's handler
-      const handlerResult = await this.handler(job);
+      // Convert ReservedJob to Job instance for the handler
+      const jobInstance = Job.fromReserved(this.q, job, {
+        processedOn: jobStartWallTime,
+        status: 'active',
+      });
+
+      // Execute the user's handler with Job instance
+      const handlerResult = await this.handler(jobInstance);
 
       // Job finished quickly, cancel delayed heartbeat start
       if (heartbeatDelayTimer) {
@@ -1324,7 +1336,12 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     job: ReservedJob<T>,
     jobStartWallTime: number,
   ): Promise<void> {
-    this.onError?.(err, job);
+    // Convert to Job instance for onError callback
+    const jobInstance = Job.fromReserved(this.q, job, {
+      processedOn: jobStartWallTime,
+      status: 'active',
+    });
+    this.onError?.(err, jobInstance);
 
     // Reset adaptive timeout after job failure
     // This ensures the worker uses the low timeout (0.1s) for the next fetch

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, type ReservedJob, Worker } from '../src';
+import { Job, Queue, Worker } from '../src';
 import { createRedis } from './helpers/redis';
 
 describe('Edge Cases and Error Handling Tests', () => {
@@ -234,7 +234,7 @@ describe('Edge Cases and Error Handling Tests', () => {
       data: longData,
     });
 
-    let processedJob: ReservedJob | null = null;
+    let processedJob: Job | null = null;
 
     const worker = new Worker({
       queue: q,
