@@ -47,15 +47,15 @@ if groupId then
   end
 end
 
--- Finally, delete the job hash and flow results
-redis.call("DEL", jobKey)
-redis.call("DEL", ns .. ":flow:results:" .. jobId)
+-- Finally, delete the job hash, flow results and children tracking (variadic DEL optimization)
+redis.call("DEL", 
+  jobKey,
+  ns .. ":flow:results:" .. jobId,
+  ns .. ":flow:children:" .. jobId
+)
 
 -- Clean up flow relationships
--- 1. If this job is a parent, delete its children tracking set
-redis.call("DEL", ns .. ":flow:children:" .. jobId)
-
--- 2. If this job is a child, remove it from parent's children set
+-- If this job is a child, remove it from parent's children set
 if parentId then
   redis.call("SREM", ns .. ":flow:children:" .. parentId, jobId)
 end

@@ -52,14 +52,13 @@ for i = 1, #ids do
     end
   end
 
-  -- Delete job hash, idempotence key and flow results
-  redis.call('DEL', jobKey)
-  redis.call('DEL', ns .. ':unique:' .. id)
-  redis.call('DEL', ns .. ':flow:results:' .. id)
-
-  -- Clean up flow relationships
-  -- 1. If this job is a parent, delete its children tracking set
-  redis.call('DEL', ns .. ':flow:children:' .. id)
+  -- Delete job hash, idempotence key, flow results and children tracking (variadic DEL optimization)
+  redis.call('DEL', 
+    jobKey,
+    ns .. ':unique:' .. id,
+    ns .. ':flow:results:' .. id,
+    ns .. ':flow:children:' .. id
+  )
 
   -- 2. If this job is a child, remove it from parent's children set
   if parentId then
