@@ -32,6 +32,7 @@
     "node": ">=18"
   },
   "scripts": {
+    "dev": "tsdown --watch",
     "build": "tsdown src/index.ts --format esm --format cjs --dts --sourcemap && node scripts/copy-lua.mjs",
     "prebuild": "pnpm test:lua",
     "test": "vitest run --no-file-parallelism",
