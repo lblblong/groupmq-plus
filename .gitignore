@@ -4,3 +4,4 @@ dist
 repomix-output.xml
 .env.local
 .kiro
+.npmrc
