@@ -4,6 +4,11 @@ local jobId = ARGV[1]
 local newDelayUntil = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 
+-- Validate required parameters
+if not newDelayUntil or not now then
+  return 0
+end
+
 local jobKey = ns .. ":job:" .. jobId
 local delayedKey = ns .. ":delayed"
 local readyKey = ns .. ":ready"
@@ -21,6 +26,12 @@ end
 
 local gZ = ns .. ":g:" .. groupId
 
+-- Check if job is still in group (not deleted)
+local jobInGroup = redis.call("ZSCORE", gZ, jobId)
+if not jobInGroup then
+  return 0
+end
+
 -- Update job's delayUntil field
 redis.call("HSET", jobKey, "delayUntil", tostring(newDelayUntil))
 
@@ -30,13 +41,9 @@ local inDelayed = redis.call("ZSCORE", delayedKey, jobId)
 if newDelayUntil > 0 and newDelayUntil > now then
   -- Job should be delayed
   redis.call("HSET", jobKey, "status", "delayed")
-  if inDelayed then
-    -- Update existing delay
-    redis.call("ZADD", delayedKey, newDelayUntil, jobId)
-  else
-    -- Move to delayed
-    redis.call("ZADD", delayedKey, newDelayUntil, jobId)
-    -- If this is the head job, remove group from ready
+  redis.call("ZADD", delayedKey, newDelayUntil, jobId)
+  -- If this is the head job and wasn't already delayed, remove group from ready
+  if not inDelayed then
     local head = redis.call("ZRANGE", gZ, 0, 0)
     if head and #head > 0 and head[1] == jobId then
       redis.call("ZREM", readyKey, groupId)
@@ -48,12 +55,12 @@ else
   if inDelayed then
     -- Remove from delayed
     redis.call("ZREM", delayedKey, jobId)
-    -- If this is the head job, ensure group is in ready
-    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-    if head and #head >= 2 and head[1] == jobId then
-      local headScore = tonumber(head[2])
-      redis.call("ZADD", readyKey, headScore, groupId)
-    end
+  end
+  -- If this is the head job, ensure group is in ready
+  local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+  if head and #head >= 2 and head[1] == jobId then
+    local headScore = tonumber(head[2])
+    redis.call("ZADD", readyKey, headScore, groupId)
   end
 end
 
