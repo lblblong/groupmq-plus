@@ -691,6 +691,50 @@ export class Queue<T = any> {
     return parsed;
   }
 
+  /**
+   * Gets all child job IDs for a parent job in a flow.
+   * @param parentId The ID of the parent job
+   * @returns An array of child job IDs
+   */
+  async getFlowChildrenIds(parentId: string): Promise<string[]> {
+    return this.r.smembers(`${this.ns}:flow:children:${parentId}`);
+  }
+
+  /**
+   * Gets all child jobs for a parent job in a flow.
+   * @param parentId The ID of the parent job
+   * @returns An array of Job instances for all children
+   */
+  async getFlowChildren(parentId: string): Promise<JobEntity<any>[]> {
+    const ids = await this.getFlowChildrenIds(parentId);
+    if (ids.length === 0) return [];
+
+    // Use pipelined Redis operations to minimize round trips
+    const pipe = this.r.multi();
+    for (const id of ids) {
+      pipe.hgetall(`${this.ns}:job:${id}`);
+    }
+    const rows = await pipe.exec();
+
+    const jobs: JobEntity<any>[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const raw = (rows?.[i]?.[1] as Record<string, string>) || {};
+
+      // Skip jobs that were already cleaned up
+      if (!raw || Object.keys(raw).length === 0) {
+        this.logger.warn(
+          `Skipping child job ${id} - not found (likely cleaned up)`,
+        );
+        continue;
+      }
+
+      const job = JobEntity.fromRawHash(this, id, raw);
+      jobs.push(job);
+    }
+    return jobs;
+  }
+
   private async addSingle(opts: {
     groupId: string;
     data: T | null;

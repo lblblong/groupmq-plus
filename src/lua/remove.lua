@@ -13,6 +13,7 @@ if redis.call("EXISTS", jobKey) == 0 then
 end
 
 local groupId = redis.call("HGET", jobKey, "groupId")
+local parentId = redis.call("HGET", jobKey, "parentId")
 
 -- Remove from delayed and processing structures
 redis.call("ZREM", delayedKey, jobId)
@@ -49,6 +50,15 @@ end
 -- Finally, delete the job hash and flow results
 redis.call("DEL", jobKey)
 redis.call("DEL", ns .. ":flow:results:" .. jobId)
+
+-- Clean up flow relationships
+-- 1. If this job is a parent, delete its children tracking set
+redis.call("DEL", ns .. ":flow:children:" .. jobId)
+
+-- 2. If this job is a child, remove it from parent's children set
+if parentId then
+  redis.call("SREM", ns .. ":flow:children:" .. parentId, jobId)
+end
 
 return 1
 

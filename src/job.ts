@@ -17,6 +17,7 @@ export class Job<T = any> {
   public readonly timestamp: number; // ms
   public readonly orderMs?: number;
   public readonly status: Status | 'unknown';
+  public readonly parentId?: string;
 
   constructor(args: {
     queue: Queue<T>;
@@ -34,6 +35,7 @@ export class Job<T = any> {
     timestamp: number;
     orderMs?: number;
     status?: Status | 'unknown';
+    parentId?: string;
   }) {
     this.queue = args.queue;
     this.id = args.id;
@@ -50,6 +52,7 @@ export class Job<T = any> {
     this.timestamp = args.timestamp;
     this.orderMs = args.orderMs;
     this.status = args.status ?? 'unknown';
+    this.parentId = args.parentId;
   }
 
   async getState(): Promise<
@@ -108,6 +111,44 @@ export class Job<T = any> {
    */
   async waitUntilFinished(timeoutMs = 0): Promise<unknown> {
     return this.queue.waitUntilFinished(this.id, timeoutMs);
+  }
+
+  /**
+   * Get all child jobs of this job (if it's a parent in a flow).
+   * @returns Array of child Job instances
+   */
+  async getChildren(): Promise<Job<any>[]> {
+    return this.queue.getFlowChildren(this.id);
+  }
+
+  /**
+   * Get the return values of all child jobs in a flow.
+   * @returns Object mapping child job IDs to their return values
+   */
+  async getChildrenValues(): Promise<Record<string, any>> {
+    return this.queue.getFlowResults(this.id);
+  }
+
+  /**
+   * Get the number of remaining child jobs that haven't completed yet.
+   * @returns Number of remaining dependencies, or null if not a parent job
+   */
+  async getDependenciesCount(): Promise<number | null> {
+    return this.queue.getFlowDependencies(this.id);
+  }
+
+  /**
+   * Get the parent job of this job (if it's a child in a flow).
+   * @returns Parent Job instance, or undefined if no parent or parent was deleted
+   */
+  async getParent(): Promise<Job<any> | undefined> {
+    if (!this.parentId) return undefined;
+    try {
+      return await this.queue.getJob(this.parentId);
+    } catch (_e) {
+      // Parent job may have been deleted
+      return undefined;
+    }
   }
 
   static fromReserved<T = any>(
@@ -176,6 +217,7 @@ export class Job<T = any> {
     const returnvalue = raw.returnvalue
       ? safeJsonParse(raw.returnvalue)
       : undefined;
+    const parentId = raw.parentId || undefined;
 
     return new Job<T>({
       queue,
@@ -199,6 +241,7 @@ export class Job<T = any> {
       timestamp: timestampMs || Date.now(),
       orderMs,
       status: knownStatus ?? coerceStatus(raw.status as any),
+      parentId,
     });
   }
 
@@ -233,6 +276,7 @@ export class Job<T = any> {
     const returnvalue = raw.returnvalue
       ? safeJsonParse(raw.returnvalue)
       : undefined;
+    const parentId = raw.parentId || undefined;
 
     // Determine status
     const [inProcessing, inDelayed] = await Promise.all([
@@ -273,6 +317,7 @@ export class Job<T = any> {
       timestamp: timestampMs || Date.now(),
       orderMs,
       status: coerceStatus(status as any),
+      parentId,
     });
   }
 }

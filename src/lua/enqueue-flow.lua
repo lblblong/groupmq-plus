@@ -83,6 +83,10 @@ for i = 0, childrenCount - 1 do
   
   redis.call("SET", ns .. ":unique:" .. childId, childId)
   
+  -- Record child relationship for introspection
+  -- Key: {ns}:flow:children:{parentId}
+  redis.call("SADD", ns .. ":flow:children:" .. parentId, childId)
+  
   -- Handle delay or immediate waiting
   if childDelay > 0 then
     local delayUntil = now + childDelay

@@ -30,6 +30,7 @@ for i = 1, #ids do
   -- Remove from group and update ready queue for ALL statuses
   -- This prevents poisoned groups when completed/failed jobs are cleaned
   local groupId = redis.call('HGET', jobKey, 'groupId')
+  local parentId = redis.call('HGET', jobKey, 'parentId')
   if groupId then
     local gZ = ns .. ':g:' .. groupId
     local readyKey = ns .. ':ready'
@@ -55,6 +56,15 @@ for i = 1, #ids do
   redis.call('DEL', jobKey)
   redis.call('DEL', ns .. ':unique:' .. id)
   redis.call('DEL', ns .. ':flow:results:' .. id)
+
+  -- Clean up flow relationships
+  -- 1. If this job is a parent, delete its children tracking set
+  redis.call('DEL', ns .. ':flow:children:' .. id)
+
+  -- 2. If this job is a child, remove it from parent's children set
+  if parentId then
+    redis.call('SREM', ns .. ':flow:children:' .. parentId, id)
+  end
 
   removed = removed + 1
 end
