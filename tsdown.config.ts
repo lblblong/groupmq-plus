@@ -10,7 +10,7 @@ export default defineConfig({
   minify: true,
   plugins: [
     copy({
-      targets: [{ src: 'src/lua/*.lua', dest: 'dist/lua' }],
+      targets: [{ src: 'src/lua/**.lua', dest: 'dist/lua/' }],
     }),
   ],
   onSuccess: 'yalc push',
