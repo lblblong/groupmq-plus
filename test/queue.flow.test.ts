@@ -209,5 +209,75 @@ describe('Parent-Child Flows', () => {
       flowResults.find((r) => r.jobId === 'child-fail')?.result
     ).toBeDefined()
   })
+
+  it('父子任务均失败', async () => {
+    let finalFailedJobs: string[] = []
+    try {
+      const queue = new Queue({
+        redis,
+        namespace,
+        keepCompleted: 10,
+        keepFailed: 10,
+        maxAttempts: 2,
+      })
+
+      const parent = await queue.addFlow({
+        parent: {
+          jobId: 'parent-job',
+          groupId: 'g-parent',
+          data: { name: 'parent' },
+        },
+        children: [
+          {
+            jobId: 'child-job-1',
+            groupId: 'g-child-1',
+            data: { name: 'child1' },
+          },
+          {
+            jobId: 'child-job-2',
+            groupId: 'g-child-2',
+            data: { name: 'child2' },
+          },
+        ],
+      })
+      console.log('Flow added. Namespace:', namespace)
+
+      const worker = new Worker({
+        queue,
+        handler: async (job) => {
+          if (job.isFlowParent) {
+            throw new Error(`Parent job ${job.id} failed intentionally`)
+          } else {
+            throw new Error(`Child job ${job.id} failed intentionally`)
+          }
+        },
+      })
+      worker.on('completed', (job) => {
+        console.log(`[COMPLETED] ${job.name}-${job.id}`)
+      })
+      worker.on('failed', async (job) => {
+        const isFinalFailure = job.attemptsMade >= job.opts.attempts - 1
+        if (isFinalFailure) {
+          console.error(
+            `[FINAL FAILED] ${job.name}-${job.id}: ${job.failedReason}`
+          )
+          finalFailedJobs.push(job.id)
+        } else {
+          console.log(`[FAILED] ${job.name}-${job.id}: ${job.failedReason}`)
+        }
+      })
+
+      await parent.waitUntilFinished()
+      await new Promise((resolve) => setTimeout(resolve, 500)) // Wait a moment for logs
+
+      await worker.close()
+    } catch (err) {
+      console.log(err)
+    }
+
+    expect(finalFailedJobs).toContain('parent-job')
+    expect(finalFailedJobs).toContain('child-job-1')
+    expect(finalFailedJobs).toContain('child-job-2')
+  })
 })
 
