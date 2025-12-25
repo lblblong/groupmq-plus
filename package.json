@@ -1,18 +1,17 @@
 {
   "name": "groupmq-plus",
-  "version": "1.1.4",
+  "version": "1.2.1",
   "description": "Per-group FIFO queue on Redis with visibility timeouts and retries.",
   "license": "MIT",
   "private": false,
-  "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "typings": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -33,7 +32,7 @@
   },
   "scripts": {
     "dev": "tsdown --watch",
-    "build": "tsdown src/index.ts --format esm --format cjs --dts --sourcemap && node scripts/copy-lua.mjs",
+    "build": "tsdown",
     "prebuild": "pnpm test:lua",
     "test": "vitest run --no-file-parallelism",
     "test:lua": "node scripts/validate-lua-scripts.js",
@@ -82,8 +81,9 @@
     "pidusage": "^4.0.1",
     "pino": "^9.12.0",
     "pretty-ms": "^9.3.0",
+    "rollup-plugin-copy": "^3.5.0",
     "semantic-release": "^23.0.0",
-    "tsdown": "^0.15.4",
+    "tsdown": "^0.15.12",
     "typescript": "^5.6.2",
     "vitest": "^2.0.5",
     "winston": "^3.18.3"

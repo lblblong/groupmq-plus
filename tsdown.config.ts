@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import copy from 'rollup-plugin-copy'
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -7,7 +8,11 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   minify: true,
-  copy: [{ from: 'src/lua', to: 'dist/lua' }],
+  plugins: [
+    copy({
+      targets: [{ src: 'src/lua/*.lua', dest: 'dist/lua' }],
+    }),
+  ],
   onSuccess: 'yalc push',
 })
 
