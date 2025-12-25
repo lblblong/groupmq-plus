@@ -675,18 +675,35 @@ export class Queue<T = any> {
   /**
    * Gets the results of all child jobs in a flow.
    * @param parentId The ID of the parent job
-   * @returns An array of objects containing child job IDs and their results
+   * @returns An array of objects containing child job IDs and their results (success or error)
    */
-  async getFlowResults(
+  async getFlowResults<R = any>(
     parentId: string
-  ): Promise<Array<{ jobId: string; result: any }>> {
+  ): Promise<
+    Array<
+      | { jobId: string; result: R }
+      | {
+          jobId: string
+          result: { message: string; name: string; stack: string }
+        }
+    >
+  > {
     const results = await this.r.hgetall(`${this.ns}:flow:results:${parentId}`)
-    const parsed: Array<{ jobId: string; result: any }> = []
+    const parsed: Array<
+      | { jobId: string; result: R }
+      | {
+          jobId: string
+          result: { message: string; name: string; stack: string }
+        }
+    > = []
     for (const [id, val] of Object.entries(results)) {
       try {
         parsed.push({ jobId: id, result: JSON.parse(val) })
       } catch (_e) {
-        parsed.push({ jobId: id, result: val })
+        parsed.push({
+          jobId: id,
+          result: val as any,
+        })
       }
     }
     return parsed

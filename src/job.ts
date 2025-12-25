@@ -125,7 +125,7 @@ export class Job<T = any> {
    * Get the return values of all child jobs in a flow.
    * @returns Object mapping child job IDs to their return values
    */
-  async getChildrenValues(): Promise<{ jobId: string; result: any }[]> {
+  async getChildrenValues() {
     return this.queue.getFlowResults(this.id)
   }
 
