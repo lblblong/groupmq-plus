@@ -89,8 +89,8 @@ for i = 1, #groups, 2 do
           local jobId = zpop[1]
           
           local jobKey = ns .. ":job:" .. jobId
-          local job = redis.call("HMGET", jobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score")
-          local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9]
+          local job = redis.call("HMGET", jobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
+          local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
 
           -- Validate job data exists (handle corrupted/missing job hash)
           if not id or id == false then
@@ -120,7 +120,7 @@ for i = 1, #groups, 2 do
               redis.call("ZADD", readyKey, nextScore, gid)
             end
 
-            table.insert(out, id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline)
+            table.insert(out, id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0"))
             table.insert(processedGroups, gid)
           end
         end

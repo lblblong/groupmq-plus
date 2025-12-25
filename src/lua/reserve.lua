@@ -99,7 +99,7 @@ for i = 1, #groups, 2 do
           headJobId = zpop[1]
           -- Read the popped job (use headJobId to avoid races)
           headJobKey = ns .. ":job:" .. headJobId
-          job = redis.call("HMGET", headJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score")
+          job = redis.call("HMGET", headJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
           
           -- Push to group active list
           redis.call("LPUSH", groupActiveKey, headJobId)
@@ -156,6 +156,7 @@ if nextHead and #nextHead >= 2 then
   redis.call("ZADD", readyKey, nextScore, chosenGid)
 end
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline
+local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
+return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")
 
 

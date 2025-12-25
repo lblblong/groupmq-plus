@@ -86,7 +86,12 @@ if parentId then
   -- 1. Store child result in a separate hash to define parent's "childrenValues"
   -- Key: flow:results:{parentId}, Field: {childId}
   local flowResultsKey = ns .. ":flow:results:" .. parentId
-  redis.call("HSET", flowResultsKey, jobId, resultOrError)
+  -- [NEW] 核心变更：包装结果为 {status, data} 结构
+  local flowEntry = cjson.encode({
+    status = status,
+    data = resultOrError
+  })
+  redis.call("HSET", flowResultsKey, jobId, flowEntry)
   
   -- 2. Decrement remaining counter
   local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)

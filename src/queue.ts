@@ -7,6 +7,15 @@ import { evalScript } from './lua/loader'
 import type { Status } from './status'
 
 /**
+ * Flow child result type with explicit status
+ */
+export type FlowChildResult<R = any> = {
+  jobId: string
+  status: 'completed' | 'failed'
+  result: R
+}
+
+/**
  * Options for configuring a GroupMQ queue
  */
 export type QueueOptions = {
@@ -400,6 +409,7 @@ export type ReservedJob<T = any> = {
   orderMs: number
   score: number
   deadlineAt: number
+  isFlowParent: boolean
 }
 
 function nsKey(ns: string, ...parts: string[]) {
@@ -656,6 +666,7 @@ export class Queue<T = any> {
       opts: { attempts: parentMaxAttempts },
       timestamp: now,
       orderMs: parentOrderMs,
+      isFlowParent: true,
     })
   }
 
@@ -674,35 +685,45 @@ export class Queue<T = any> {
 
   /**
    * Gets the results of all child jobs in a flow.
+   * STRICT MODE: Expects { status, data } structure from Lua scripts.
    * @param parentId The ID of the parent job
-   * @returns An array of objects containing child job IDs and their results (success or error)
+   * @returns An array of objects containing child job IDs, status, and results
    */
   async getFlowResults<R = any>(
     parentId: string
-  ): Promise<
-    Array<
-      | { jobId: string; result: R }
-      | {
-          jobId: string
-          result: { message: string; name: string; stack: string }
-        }
-    >
-  > {
+  ): Promise<FlowChildResult<R>[]> {
     const results = await this.r.hgetall(`${this.ns}:flow:results:${parentId}`)
-    const parsed: Array<
-      | { jobId: string; result: R }
-      | {
-          jobId: string
-          result: { message: string; name: string; stack: string }
-        }
-    > = []
+    const parsed: FlowChildResult<R>[] = []
+
     for (const [id, val] of Object.entries(results)) {
       try {
-        parsed.push({ jobId: id, result: JSON.parse(val) })
-      } catch (_e) {
+        // 1. 解析外层包装: { status: string, data: string }
+        const envelope = JSON.parse(val)
+
+        // 2. 解析内层数据 (data 是 Worker 序列化过的字符串)
+        // 注意：如果 data 本身不是 JSON 字符串（极少见），则保留原值
+        let innerResult = envelope.data
+        if (typeof envelope.data === 'string') {
+          try {
+            innerResult = JSON.parse(envelope.data)
+          } catch {
+            // data 不是 JSON，保持原样（例如纯文本错误信息）
+          }
+        }
+
         parsed.push({
           jobId: id,
-          result: val as any,
+          status: envelope.status as 'completed' | 'failed',
+          result: innerResult,
+        })
+      } catch (e) {
+        // 解析失败意味着数据损坏，记录错误或抛出
+        this.logger.error(`Failed to parse flow result for child ${id}`, e)
+        // 标记为 failed 并提供错误信息
+        parsed.push({
+          jobId: id,
+          status: 'failed',
+          result: { error: 'Corrupted result data' } as any,
         })
       }
     }
@@ -940,7 +961,7 @@ export class Queue<T = any> {
     if (!raw) return null
 
     const parts = raw.split('|||')
-    if (parts.length !== 10) return null
+    if (parts.length !== 11) return null
 
     let data: T
     try {
@@ -966,6 +987,7 @@ export class Queue<T = any> {
         : parsedOrderMs, // Fallback to timestamp if orderMs is NaN
       score: Number(parts[8]),
       deadlineAt: Number.parseInt(parts[9], 10),
+      isFlowParent: parts[10] === '1',
     } as ReservedJob<T>
 
     return job
@@ -1080,7 +1102,7 @@ export class Queue<T = any> {
 
       // Parse the result (same format as reserve methods)
       const parts = result.split('|||')
-      if (parts.length !== 10) {
+      if (parts.length !== 11) {
         this.logger.error(
           'Queue completeAndReserveNextWithMetadata: unexpected result format:',
           result
@@ -1099,6 +1121,7 @@ export class Queue<T = any> {
         orderMs,
         score,
         deadline,
+        isFlowParent,
       ] = parts
 
       return {
@@ -1112,6 +1135,7 @@ export class Queue<T = any> {
         orderMs: parseInt(orderMs, 10),
         score: parseFloat(score),
         deadlineAt: parseInt(deadline, 10),
+        isFlowParent: isFlowParent === '1',
       }
     } catch (error) {
       this.logger.error(
@@ -1719,7 +1743,7 @@ export class Queue<T = any> {
 
     // Parse the delimited string response (same format as regular reserve)
     const parts = result.split('|||')
-    if (parts.length < 10) return null
+    if (parts.length < 11) return null
 
     const [
       id,
@@ -1732,6 +1756,7 @@ export class Queue<T = any> {
       orderMs,
       score,
       deadline,
+      isFlowParent,
     ] = parts
 
     const parsedTimestamp = parseInt(timestamp, 10)
@@ -1747,6 +1772,7 @@ export class Queue<T = any> {
       orderMs: Number.isNaN(parsedOrderMs) ? parsedTimestamp : parsedOrderMs, // Fallback to timestamp if orderMs is NaN
       score: parseFloat(score),
       deadlineAt: parseInt(deadline, 10),
+      isFlowParent: isFlowParent === '1',
     }
   }
 
@@ -1846,7 +1872,7 @@ export class Queue<T = any> {
     for (const r of results || []) {
       if (!r) continue
       const parts = r.split('|||')
-      if (parts.length !== 10) continue
+      if (parts.length !== 11) continue
       out.push({
         id: parts[0],
         groupId: parts[1],
@@ -1858,6 +1884,7 @@ export class Queue<T = any> {
         orderMs: parseInt(parts[7], 10),
         score: parseFloat(parts[8]),
         deadlineAt: parseInt(parts[9], 10),
+        isFlowParent: parts[10] === '1',
       } as ReservedJob<T>)
     }
     return out

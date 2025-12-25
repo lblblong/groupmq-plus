@@ -42,7 +42,8 @@ redis.call("HMSET", parentKey,
   "score", tostring(parentScore),
   "seq", tostring(parentSeq),
   "status", "waiting-children", 
-  "flowRemaining", tostring(childrenCount)
+  "flowRemaining", tostring(childrenCount),
+  "isFlowParent", "1"
 )
 
 -- 2. Setup Children Jobs

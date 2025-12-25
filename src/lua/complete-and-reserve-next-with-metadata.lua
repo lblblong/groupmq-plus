@@ -55,7 +55,12 @@ if status == "completed" then
     local parentKey = ns .. ":job:" .. parentId
     -- 1. Store child result in flow:results hash (CRITICAL: was missing!)
     local flowResultsKey = ns .. ":flow:results:" .. parentId
-    redis.call("HSET", flowResultsKey, completedJobId, resultOrError)
+    -- [NEW] 核心变更：包装结果为 {status, data} 结构
+    local flowEntry = cjson.encode({
+      status = status,
+      data = resultOrError
+    })
+    redis.call("HSET", flowResultsKey, completedJobId, flowEntry)
     
     -- 2. Decrement remaining counter
     local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)
@@ -188,8 +193,8 @@ end
 
 local nextJobId = zpop[1]
 local nextJobKey = ns .. ":job:" .. nextJobId
-local job = redis.call("HMGET", nextJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score")
-local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9]
+local job = redis.call("HMGET", nextJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
+local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
 
 -- Validate job data exists (handle corrupted/missing job hash)
 if not id or id == false then
@@ -226,4 +231,4 @@ if nextHead and #nextHead >= 2 then
   redis.call("ZADD", readyKey, nextScore, groupId)
 end
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline
+return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")

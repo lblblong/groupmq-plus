@@ -51,7 +51,12 @@ if parentId then
   local parentKey = ns .. ":job:" .. parentId
   -- 1. Store error result in flow:results hash
   local flowResultsKey = ns .. ":flow:results:" .. parentId
-  redis.call("HSET", flowResultsKey, jobId, '{"error":"dead-lettered"}')
+  -- [NEW] 核心变更：统一死信的存储格式
+  local flowEntry = cjson.encode({
+    status = "failed",
+    data = '{"error":"dead-lettered", "reason":"max attempts exceeded"}'
+  })
+  redis.call("HSET", flowResultsKey, jobId, flowEntry)
   
   -- 2. Decrement remaining counter
   local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)

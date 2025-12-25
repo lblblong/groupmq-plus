@@ -18,6 +18,7 @@ export class Job<T = any> {
   public readonly orderMs?: number
   public readonly status: Status | 'unknown'
   public readonly parentId?: string
+  public readonly isFlowParent: boolean
 
   constructor(args: {
     queue: Queue<T>
@@ -36,6 +37,7 @@ export class Job<T = any> {
     orderMs?: number
     status?: Status | 'unknown'
     parentId?: string
+    isFlowParent?: boolean
   }) {
     this.queue = args.queue
     this.id = args.id
@@ -53,6 +55,7 @@ export class Job<T = any> {
     this.orderMs = args.orderMs
     this.status = args.status ?? 'unknown'
     this.parentId = args.parentId
+    this.isFlowParent = args.isFlowParent === true
   }
 
   async getState(): Promise<
@@ -78,6 +81,7 @@ export class Job<T = any> {
       orderMs: this.orderMs,
       status: this.status,
       progress: 0, // Default progress value
+      isFlowParent: this.isFlowParent,
     }
   }
 
@@ -183,6 +187,7 @@ export class Job<T = any> {
       timestamp: reserved.timestamp ? reserved.timestamp : Date.now(),
       orderMs: reserved.orderMs,
       status: coerceStatus(meta?.status as any),
+      isFlowParent: reserved.isFlowParent,
     })
   }
 
@@ -215,6 +220,7 @@ export class Job<T = any> {
       ? safeJsonParse(raw.returnvalue)
       : undefined
     const parentId = raw.parentId || undefined
+    const isFlowParent = raw.isFlowParent === '1'
 
     return new Job<T>({
       queue,
@@ -239,6 +245,7 @@ export class Job<T = any> {
       orderMs,
       status: knownStatus ?? coerceStatus(raw.status as any),
       parentId,
+      isFlowParent,
     })
   }
 
@@ -271,6 +278,7 @@ export class Job<T = any> {
       ? safeJsonParse(raw.returnvalue)
       : undefined
     const parentId = raw.parentId || undefined
+    const isFlowParent = raw.isFlowParent === '1'
 
     // Determine status
     const [inProcessing, inDelayed] = await Promise.all([
@@ -312,6 +320,7 @@ export class Job<T = any> {
       orderMs,
       status: coerceStatus(status as any),
       parentId,
+      isFlowParent,
     })
   }
 }
