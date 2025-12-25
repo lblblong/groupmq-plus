@@ -146,8 +146,12 @@ describe('Parent-Child Flows', () => {
 
     // 验证子任务结果被正确存储
     const flowResults = await queue.getFlowResults(parentId)
-    expect(flowResults['child-a']).toEqual({ computed: 20 })
-    expect(flowResults['child-b']).toEqual({ computed: 40 })
+    expect(flowResults.find((r) => r.jobId === 'child-a')?.result).toEqual({
+      computed: 20,
+    })
+    expect(flowResults.find((r) => r.jobId === 'child-b')?.result).toEqual({
+      computed: 40,
+    })
     await worker.close()
   })
 
@@ -197,9 +201,13 @@ describe('Parent-Child Flows', () => {
 
     // 验证 flowResults 包含结果
     const flowResults = await queue.getFlowResults(parentId)
-    expect(flowResults['child-ok']).toBe('success')
+    expect(flowResults.find((r) => r.jobId === 'child-ok')?.result).toBe(
+      'success'
+    )
     // 失败的子任务结果应该包含错误信息
-    expect(flowResults['child-fail']).toBeDefined()
+    expect(
+      flowResults.find((r) => r.jobId === 'child-fail')?.result
+    ).toBeDefined()
   })
 })
 
