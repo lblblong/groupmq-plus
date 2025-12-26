@@ -301,13 +301,6 @@ export type WorkerOptions<T> = {
   strategy?: DispatchStrategy
 
   /**
-   * 策略模式下的轮询间隔 (ms)
-   * 当使用 Strategy 时，我们无法使用阻塞读取 (BZPOPMIN)，必须退化为短轮询
-   * @default 50
-   */
-  strategyPollInterval?: number
-
-  /**
    * 是否自动启动 Worker
    * 设置为 false 时，需要手动调用 run() 方法启动 Worker
    *
@@ -483,7 +476,6 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
   private async _runLoop(): Promise<void> {
     this.logger.info(`🚀 Worker ${this.name} starting...`)
-    const strategyPollInterval = this.opts.strategyPollInterval ?? 50
 
     // Dedicated blocking client per worker with auto-pipelining to reduce contention
     try {
@@ -586,40 +578,27 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
           }
 
           this.logger.debug(
-            `Fetching job (call #${
-              this.blockingStats.totalBlockingCalls
-            }, processing: ${this.jobsInProgress.size}/${
-              this.concurrency
-            }, queue: ${asyncFifoQueue.numTotal()} (queued: ${asyncFifoQueue.numQueued()}, pending: ${asyncFifoQueue.numPending()}), total: ${asyncFifoQueue.numTotal()}/${
-              this.concurrency
+            `Fetching job (call #${this.blockingStats.totalBlockingCalls
+            }, processing: ${this.jobsInProgress.size}/${this.concurrency
+            }, queue: ${asyncFifoQueue.numTotal()} (queued: ${asyncFifoQueue.numQueued()}, pending: ${asyncFifoQueue.numPending()}), total: ${asyncFifoQueue.numTotal()}/${this.concurrency
             })...`
           )
 
           let fetchedJob: Promise<ReservedJob<T> | null>
 
           if (this.opts.strategy) {
-            // A. 策略模式 (Polling)
+            // A. 策略模式 (IoC - 控制反转)
+            // Worker 直接调用 strategy.acquireJob()，完全由策略负责获取任务
+            // 策略内部处理：
+            // 1. 获取 Ready Group 列表
+            // 2. 按优先级排序
+            // 3. 循环尝试预留（处理并发满、队列空等状态）
             fetchedJob = (async () => {
-              // 1. 询问策略：下一个该谁？
-              const targetGroupId = await this.opts.strategy!.getNextGroup(
-                this.q
-              )
-
-              if (!targetGroupId) {
-                // 策略说没有合适的组，或者队列为空
-                // 等待一段时间再轮询，避免空转 CPU
-                await this.delay(strategyPollInterval)
-                return null
-              }
-
-              // 2. 原子抢占：尝试从指定组拿任务
-              // 注意：这里可能会失败（比如并发满了，或者刚刚被别的 Worker 抢了）
-              const job = await this.q.reserveAtomic(targetGroupId)
-
+              const job = await this.opts.strategy!.acquireJob(this.q)
               if (!job) {
-                // 抢占失败，可能是竞争导致，稍作退避
-                // 也可以立即重试，取决于激进程度
-                return null
+                // 策略返回 null：暂无可用任务
+                // 等待一段时间再轮询，避免空转 CPU
+                await this.delay(this.opts.strategy!.idleInterval)
               }
               return job
             })()
@@ -665,10 +644,10 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
             fetchedJob = allowBlocking
               ? this.q.reserveBlocking(
-                  adaptiveTimeout,
-                  undefined, // blockUntil removed (was always 0, dead code)
-                  this.blockingClient ?? undefined
-                )
+                adaptiveTimeout,
+                undefined, // blockUntil removed (was always 0, dead code)
+                this.blockingClient ?? undefined
+              )
               : this.q.reserve()
           }
 
@@ -733,8 +712,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
                 this.logger.debug(
                   `Applying backoff: ${Math.round(
                     this.emptyReserveBackoffMs
-                  )}ms (consecutive empty: ${
-                    this.blockingStats.consecutiveEmptyReserves
+                  )}ms (consecutive empty: ${this.blockingStats.consecutiveEmptyReserves
                   }, jobs in progress: ${this.jobsInProgress.size})`
                 )
               }
@@ -1391,8 +1369,8 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
           err instanceof Error
             ? err.stack
             : typeof err === 'object' && err !== null
-            ? (err as any).stack
-            : undefined,
+              ? (err as any).stack
+              : undefined,
         status: 'failed',
       })
     )
@@ -1401,8 +1379,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     const nextAttempt = job.attempts + 1
     if (err instanceof UnrecoverableError) {
       this.logger.info(
-        `Unrecoverable error for job ${job.id}: ${
-          err instanceof Error ? err.message : String(err)
+        `Unrecoverable error for job ${job.id}: ${err instanceof Error ? err.message : String(err)
         }. Skipping retries.`
       )
       await this.deadLetterJob(

@@ -82,9 +82,9 @@ describe('Corrupted/Missing Job Hash Tests', () => {
 
     try {
       // Should handle gracefully
-      const result = await queue['reserveAtomic'](groupId, null);
-      // Should return null
-      expect(result).toBeNull();
+      const result = await queue['reserveAtomic'](groupId);
+      // Should return empty status
+      expect(result.status).toBe('empty');
     } catch (error: any) {
       if (error.message && error.message.includes('attempt to concatenate')) {
         concatenationError = true;
@@ -95,8 +95,10 @@ describe('Corrupted/Missing Job Hash Tests', () => {
 
     // Verify queue still works
     await queue.add({ groupId, data: { test: 'valid' } });
-    const validJob = await queue['reserveAtomic'](groupId, null);
-    expect(validJob).not.toBeNull();
-    expect(validJob?.groupId).toBe(groupId);
+    const result = await queue['reserveAtomic'](groupId);
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.job.groupId).toBe(groupId);
+    }
   });
 });

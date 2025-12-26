@@ -7,6 +7,18 @@ import { evalScript } from './lua/loader'
 import type { Status } from './status'
 
 /**
+ * Group 的配置信息
+ * concurrency 是核心字段，影响 Lua 脚本行为
+ * 其他字段为策略层使用的元数据（如 priority, weight 等）
+ */
+export type GroupConfig = {
+  /** 并发限制 (Core Engine 使用) */
+  concurrency?: number;
+  /** 允许存储任意元数据供 Strategy 使用 */
+  [key: string]: any;
+};
+
+/**
  * Flow child result type with explicit status
  */
 export type FlowChildResult<R = any> = {
@@ -14,6 +26,14 @@ export type FlowChildResult<R = any> = {
   status: 'completed' | 'failed'
   result: R
 }
+
+/**
+ * Reserve result type with explicit status distinction between success, limit exceeded, and empty
+ */
+export type ReserveResult<T = any> =
+  | { status: 'success'; job: ReservedJob<T> }
+  | { status: 'limit_exceeded' } // Lua returned "E_LIMIT" (concurrency limit reached)
+  | { status: 'empty' } // Queue or group is empty
 
 /**
  * Options for configuring a GroupMQ queue
@@ -195,11 +215,11 @@ export type QueueOptions = {
    * - Consider graceful shutdown handling
    */
   autoBatch?:
-    | boolean
-    | {
-        size?: number
-        maxWaitMs?: number
-      }
+  | boolean
+  | {
+    size?: number
+    maxWaitMs?: number
+  }
 }
 
 /**
@@ -207,34 +227,34 @@ export type QueueOptions = {
  */
 export type RepeatOptions =
   | {
-      /**
-       * Repeat interval in milliseconds. Job will be created every N milliseconds.
-       *
-       * @example 60000 // Every minute
-       * @example 3600000 // Every hour
-       * @example 86400000 // Every day
-       *
-       * When to use:
-       * - Simple intervals: Use for regular, predictable schedules
-       * - High frequency: Good for sub-hour intervals
-       * - Performance: More efficient than cron for simple intervals
-       */
-      every: number
-    }
+    /**
+     * Repeat interval in milliseconds. Job will be created every N milliseconds.
+     *
+     * @example 60000 // Every minute
+     * @example 3600000 // Every hour
+     * @example 86400000 // Every day
+     *
+     * When to use:
+     * - Simple intervals: Use for regular, predictable schedules
+     * - High frequency: Good for sub-hour intervals
+     * - Performance: More efficient than cron for simple intervals
+     */
+    every: number
+  }
   | {
-      /**
-       * Cron pattern for complex scheduling. Uses standard cron syntax with seconds.
-       * Format: second minute hour day month dayOfWeek
-       *
-       * When to use:
-       * - Complex schedules: Business hours, specific days, etc.
-       * - Low frequency: Good for daily, weekly, monthly schedules
-       * - Business logic: Align with business requirements
-       *
-       * Cron format uses standard syntax with seconds precision.
-       */
-      pattern: string
-    }
+    /**
+     * Cron pattern for complex scheduling. Uses standard cron syntax with seconds.
+     * Format: second minute hour day month dayOfWeek
+     *
+     * When to use:
+     * - Complex schedules: Business hours, specific days, etc.
+     * - Low frequency: Good for daily, weekly, monthly schedules
+     * - Business logic: Align with business requirements
+     *
+     * Cron format uses standard syntax with seconds precision.
+     */
+    pattern: string
+  }
 
 /**
  * Options for a single job in a flow
@@ -497,9 +517,9 @@ export class Queue<T = any> {
         typeof opts.autoBatch === 'boolean'
           ? { size: 10, maxWaitMs: 10 }
           : {
-              size: opts.autoBatch.size ?? 10,
-              maxWaitMs: opts.autoBatch.maxWaitMs ?? 10,
-            }
+            size: opts.autoBatch.size ?? 10,
+            maxWaitMs: opts.autoBatch.maxWaitMs ?? 10,
+          }
     }
 
     // Initialize logger first
@@ -1661,10 +1681,11 @@ export class Queue<T = any> {
 
       // Try to reserve atomically from the specific group to eliminate race conditions
       const reserveStart = Date.now()
-      const job = await this.reserveAtomic(groupId)
+      const reserveResult = await this.reserveAtomic(groupId)
       const reserveDuration = Date.now() - reserveStart
 
-      if (job) {
+      if (reserveResult.status === 'success') {
+        const job = reserveResult.job
         this.logger.debug(
           `Successful job reserve after blocking: ${job.id} from group ${job.groupId} (reserve took ${reserveDuration}ms)`
         )
@@ -1672,7 +1693,7 @@ export class Queue<T = any> {
         this._consecutiveEmptyReserves = 0
       } else {
         this.logger.warn(
-          `Blocking found group but reserve failed: group=${groupId} (reserve took ${reserveDuration}ms)`
+          `Blocking found group but reserve failed: group=${groupId}, status=${reserveResult.status} (reserve took ${reserveDuration}ms)`
         )
 
         // Check if group actually has jobs before restoring to prevent infinite loops
@@ -1704,7 +1725,7 @@ export class Queue<T = any> {
         this._consecutiveEmptyReserves = this._consecutiveEmptyReserves + 1
         return this.reserve()
       }
-      return job
+      return reserveResult.status === 'success' ? reserveResult.job : null
     } catch (err) {
       const errorDuration = Date.now() - startTime
       this.logger.error(`Blocking error after ${errorDuration}ms:`, err)
@@ -1728,9 +1749,10 @@ export class Queue<T = any> {
 
   /**
    * Reserve a job from a specific group atomically (eliminates race conditions)
+   * Returns an explicit status to distinguish between success, limit exceeded, and empty states
    * @param groupId - The group to reserve from
    */
-  public async reserveAtomic(groupId: string): Promise<ReservedJob<T> | null> {
+  public async reserveAtomic(groupId: string): Promise<ReserveResult<T>> {
     const now = Date.now()
 
     const result = await evalScript<string | null>(
@@ -1739,11 +1761,22 @@ export class Queue<T = any> {
       [this.ns, String(now), String(this.vt), String(groupId)],
       1
     )
-    if (!result) return null
+
+    // Handle E_LIMIT: concurrency limit exceeded
+    if (result === 'E_LIMIT') {
+      return { status: 'limit_exceeded' }
+    }
+
+    // Handle nil/empty: queue or group is empty
+    if (!result) {
+      return { status: 'empty' }
+    }
 
     // Parse the delimited string response (same format as regular reserve)
     const parts = result.split('|||')
-    if (parts.length < 11) return null
+    if (parts.length < 11) {
+      return { status: 'empty' }
+    }
 
     const [
       id,
@@ -1761,7 +1794,8 @@ export class Queue<T = any> {
 
     const parsedTimestamp = parseInt(timestamp, 10)
     const parsedOrderMs = parseInt(orderMs, 10)
-    return {
+
+    const job: ReservedJob<T> = {
       id,
       groupId: groupIdRaw,
       data: JSON.parse(data),
@@ -1774,6 +1808,8 @@ export class Queue<T = any> {
       deadlineAt: parseInt(deadline, 10),
       isFlowParent: isFlowParent === '1',
     }
+
+    return { status: 'success', job }
   }
 
   /**
@@ -1787,34 +1823,57 @@ export class Queue<T = any> {
   }
 
   /**
-   * 设置组的元数据 (优先级/并发度)
+   * 设置组的配置和元数据
    * 我们将使用 Hash 存储这些配置: groupmq:{ns}:config:{groupId}
+   * @param groupId 组 ID
+   * @param config 配置对象。concurrency 会影响核心调度，其他字段供 Strategy 使用。
    */
   async setGroupConfig(
     groupId: string,
-    config: { priority?: number; concurrency?: number }
+    config: GroupConfig
   ): Promise<void> {
-    const key = `${this.ns}:config:${groupId}`
-    const args: string[] = []
-    if (config.priority !== undefined)
-      args.push('priority', String(config.priority))
-    if (config.concurrency !== undefined)
-      args.push('concurrency', String(config.concurrency))
+    const key = `${this.ns}:config:${groupId}`;
+    const args: string[] = [];
+
+    for (const [k, v] of Object.entries(config)) {
+      if (v !== undefined && v !== null) {
+        args.push(k, String(v));
+      }
+    }
 
     if (args.length > 0) {
-      await this.r.hset(key, ...args)
+      await this.r.hset(key, ...args);
     }
   }
 
-  async getGroupConfig(
-    groupId: string
-  ): Promise<{ priority: number; concurrency: number }> {
-    const key = `${this.ns}:config:${groupId}`
-    const [p, c] = await this.r.hmget(key, 'priority', 'concurrency')
-    return {
-      priority: p ? parseInt(p, 10) : 1, // 默认优先级 1
-      concurrency: c ? parseInt(c, 10) : 1, // 默认并发 1
+  async getGroupConfig<T extends GroupConfig>(groupId: string): Promise<T> {
+    const key = `${this.ns}:config:${groupId}`;
+    // 获取 Hash 中所有字段
+    const raw = await this.r.hgetall(key);
+
+    const config: GroupConfig = {};
+
+    if (raw) {
+      for (const [k, v] of Object.entries(raw)) {
+        // 特殊处理 concurrency，确保它是数字
+        if (k === 'concurrency') {
+          config.concurrency = parseInt(v, 10);
+        } else {
+          // 尝试自动转数字，如果是纯数字字符串
+          // 或者保持字符串，由使用者自己转换
+          const num = Number(v);
+          config[k] = isNaN(num) ? v : num;
+        }
+      }
     }
+
+    // 默认值处理：Lua 脚本中默认 concurrency 为 1
+    // 这里为了保持一致性，也可以返回默认值，或者返回空对象让调用者处理
+    if (config.concurrency === undefined) {
+      config.concurrency = 1;
+    }
+
+    return config as T;
   }
 
   /**
@@ -2407,7 +2466,7 @@ export class Queue<T = any> {
       } catch (_err) {
         try {
           this.promoterRedis.disconnect()
-        } catch (_e) {}
+        } catch (_e) { }
       }
       this.promoterRedis = undefined
     }
@@ -2438,7 +2497,7 @@ export class Queue<T = any> {
       } catch (_err) {
         try {
           this.subscriber.disconnect()
-        } catch (_e) {}
+        } catch (_e) { }
       }
       this.subscriber = undefined
       this.eventsSubscribed = false
@@ -2457,7 +2516,7 @@ export class Queue<T = any> {
     } catch (_e) {
       try {
         this.r.disconnect()
-      } catch (_e2) {}
+      } catch (_e2) { }
     }
   }
 
@@ -2865,9 +2924,8 @@ export class Queue<T = any> {
     await this.r.zadd(`${this.ns}:repeat:schedule`, nextRunTime, repeatKey)
 
     // Create a reverse mapping for easier removal
-    const lookupKey = `${this.ns}:repeat:lookup:${
-      opts.groupId
-    }:${JSON.stringify(opts.repeat)}`
+    const lookupKey = `${this.ns}:repeat:lookup:${opts.groupId
+      }:${JSON.stringify(opts.repeat)}`
     await this.r.set(lookupKey, repeatKey)
 
     // Persist a synthetic Job entity for this repeating definition so that

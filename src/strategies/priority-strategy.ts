@@ -1,8 +1,8 @@
 import { DispatchStrategy } from './dispatch-strategy';
-import { Queue } from '../queue';
+import type { GroupConfig, Queue, ReservedJob } from '../queue';
 
 type CacheEntry = { priority: number; expiresAt: number };
-type GroupConfig = { priority: number; concurrency: number };
+type PriorityStrategyGroupConfig = GroupConfig & { priority: number; };
 
 /**
  * 自定义优先级计算函数
@@ -12,51 +12,28 @@ type GroupConfig = { priority: number; concurrency: number };
  */
 export type OnGetPriority = (
   groupId: string,
-  config: GroupConfig,
+  config: PriorityStrategyGroupConfig,
 ) => number | Promise<number>;
 
-// ============ 算法配置类型（判别联合） ============
+// ============ 算法配置类型 ============
 
-/**
- * 严格优先级算法
- * 总是选择优先级最高的组，可能导致低优先级组饥饿
- */
-export type StrictAlgorithmConfig = {
-  type: 'strict';
-};
+/** 严格优先级算法：总是选择优先级最高的组 */
+export type StrictAlgorithmConfig = { type: 'strict' };
 
-/**
- * 加权随机算法（默认）
- * 根据优先级计算概率选择，确保低优先级组也有机会被执行
- */
+/** 加权随机算法（默认）：根据优先级权重概率选择，避免低优先级饥饿 */
 export type WeightedRandomAlgorithmConfig = {
   type: 'weighted-random';
-  /**
-   * 最低优先级组的保底权重比例，默认 0.1（10%）
-   * 例如：VIP 优先级 100，普通用户优先级 1
-   * 普通用户的权重会被提升到 100 * 0.1 = 10，而不是 1
-   * 这样普通用户大约有 10/(100+10) ≈ 9% 的概率被选中
-   */
+  /** 最低权重比例，默认 0.1 */
   minWeightRatio?: number;
 };
 
-/**
- * 时间衰减算法
- * 等待时间越长，优先级加成越高，确保所有任务最终都会被执行
- */
+/** 时间衰减算法：等待时间越长，优先级加成越高 */
 export type AgingAlgorithmConfig = {
   type: 'aging';
-  /**
-   * 每等待多少毫秒增加 1 点优先级，默认 60000（1分钟）
-   * 例如：VIP 优先级 100，普通用户优先级 1
-   * 普通用户等待 100 分钟后，优先级变为 1 + 100 = 101，超过 VIP
-   */
+  /** 每增加1点优先级需要的等待毫秒数，默认 60000 */
   intervalMs?: number;
 };
 
-/**
- * 算法配置类型
- */
 export type AlgorithmConfig =
   | StrictAlgorithmConfig
   | WeightedRandomAlgorithmConfig
@@ -66,198 +43,79 @@ export type AlgorithmConfig =
 
 export interface PriorityStrategyOptions {
   /**
-   * 调度算法配置，默认 { type: 'weighted-random' }
-   *
-   * @example
-   * // 严格优先级（VIP 绝对优先）
-   * algorithm: { type: 'strict' }
-   *
-   * // 加权随机（默认，平衡公平性）
-   * algorithm: { type: 'weighted-random', minWeightRatio: 0.1 }
-   *
-   * // 时间衰减（确保无饥饿）
-   * algorithm: { type: 'aging', intervalMs: 60000 }
+   * 调度算法类型
+   * @default { type: 'weighted-random' }
    */
   algorithm?: AlgorithmConfig;
-  /** 默认优先级（未配置的组使用此值），默认 1 */
+
+  /** 
+   * 默认优先级（当无法获取配置时的回退值）
+   * @default 1 
+   */
   defaultPriority?: number;
-  /** 优先级缓存 TTL（毫秒），默认 5000ms。设为 0 禁用缓存 */
+
+  /** 
+   * 优先级缓存时间（毫秒），设为 0 禁用缓存
+   * @default 5000 
+   */
   cacheTtlMs?: number;
+
   /**
-   * 自定义优先级计算函数
-   * 如果提供，将使用此函数计算优先级，否则直接使用 config.priority
-   *
-   * @example
-   * // 根据 VIP 等级计算优先级
-   * onGetPriority: (groupId, config) => {
-   *   if (groupId.startsWith('vip:')) return config.priority * 10;
-   *   return config.priority;
-   * }
+   * 自定义优先级获取逻辑
+   * 如果提供，将优先使用此函数计算优先级
    */
   onGetPriority?: OnGetPriority;
+
+  /**
+   * 当没有任务时，Worker 的轮询间隔 (ms)
+   * @default 50
+   */
+  pollInterval?: number;
 }
 
 type GroupPriorityInfo = {
   groupId: string;
   priority: number;
-  /** 组内最老任务的入队时间戳（用于 aging 算法） */
+  /** 组内最老任务的入队时间戳（仅 aging 算法使用） */
   oldestTimestamp?: number;
 };
 
+/**
+ * 基于优先级的调度策略
+ * 
+ * 此策略负责根据 Group 的优先级决定处理顺序。
+ * 它支持多种排序算法（严格优先、加权随机、时间衰减），
+ * 并实现了"快速试错"（Fallthrough）机制以应对并发限制。
+ */
 export class PriorityStrategy implements DispatchStrategy {
   /** 本地缓存：groupId -> { priority, expiresAt } */
   private cache = new Map<string, CacheEntry>();
-  /** 手动覆盖的优先级（优先级最高） */
-  private overrides = new Map<string, number>();
 
   private algorithmConfig: AlgorithmConfig;
   private defaultPriority: number;
   private cacheTtlMs: number;
   private onGetPriority?: OnGetPriority;
+  public readonly idleInterval: number;
 
   constructor(options: PriorityStrategyOptions = {}) {
     this.algorithmConfig = options.algorithm ?? { type: 'weighted-random' };
     this.defaultPriority = options.defaultPriority ?? 1;
     this.cacheTtlMs = options.cacheTtlMs ?? 5000;
     this.onGetPriority = options.onGetPriority;
+    this.idleInterval = options.pollInterval ?? 50;
   }
 
   /**
-   * 手动覆盖某个组的优先级（优先级高于 Redis 配置和 getPriority）
-   * 主要用于测试或临时调整
+   * 获取下一个可执行的任务
+   * 
+   * 实现逻辑：
+   * 1. 批量获取当前活跃的 Group（Batch Fetch）
+   * 2. 解析每个 Group 的优先级（Resolve Priority）
+   * 3. 根据算法对 Group 进行排序（Sort）
+   * 4. 依次尝试获取任务，遇到并发限制则快速跳过（Reserve & Fallthrough）
    */
-  setPriority(groupId: string, priority: number) {
-    this.overrides.set(groupId, priority);
-  }
-
-  /**
-   * 清除手动覆盖，恢复使用 Redis 配置或 getPriority
-   */
-  clearPriority(groupId: string) {
-    this.overrides.delete(groupId);
-  }
-
-  /**
-   * 获取组的基础优先级
-   * 优先级来源顺序：overrides > cache > onGetPriority(config) 或 config.priority
-   */
-  private async resolvePriority(
-    queue: Queue<any>,
-    groupId: string,
-  ): Promise<number> {
-    // 1. 检查手动覆盖
-    const override = this.overrides.get(groupId);
-    if (override !== undefined) {
-      return override;
-    }
-
-    // 2. 检查缓存是否有效
-    const now = Date.now();
-    const cached = this.cache.get(groupId);
-    if (cached && cached.expiresAt > now) {
-      return cached.priority;
-    }
-
-    // 3. 从 Redis 读取配置
-    const config = await queue.getGroupConfig(groupId);
-
-    // 4. 计算优先级：使用自定义函数或直接取 config.priority
-    let priority: number;
-    if (this.onGetPriority) {
-      priority = await this.onGetPriority(groupId, config);
-    } else {
-      // 如果 config.priority 是默认值且用户设置了 defaultPriority，则使用 defaultPriority
-      priority = config.priority !== 1 ? config.priority : this.defaultPriority;
-    }
-
-    // 5. 更新缓存
-    if (this.cacheTtlMs > 0) {
-      this.cache.set(groupId, {
-        priority,
-        expiresAt: now + this.cacheTtlMs,
-      });
-    }
-
-    return priority;
-  }
-
-  /**
-   * 严格优先级算法：总是返回优先级最高的组
-   */
-  private selectByStrict(groups: GroupPriorityInfo[]): string {
-    groups.sort((a, b) => b.priority - a.priority);
-    return groups[0].groupId;
-  }
-
-  /**
-   * 加权随机算法：根据优先级计算概率选择
-   * 使用 minWeightRatio 确保低优先级组也有机会
-   */
-  private selectByWeightedRandom(groups: GroupPriorityInfo[]): string {
-    if (groups.length === 1) {
-      return groups[0].groupId;
-    }
-
-    // 获取算法专属参数
-    const config = this.algorithmConfig as WeightedRandomAlgorithmConfig;
-    const minWeightRatio = config.minWeightRatio ?? 0.1;
-
-    // 找出最大优先级
-    const maxPriority = Math.max(...groups.map((g) => g.priority));
-
-    // 计算每个组的权重，确保最低权重不低于 maxPriority * minWeightRatio
-    const minWeight = maxPriority * minWeightRatio;
-    const weights = groups.map((g) => ({
-      groupId: g.groupId,
-      weight: Math.max(g.priority, minWeight),
-    }));
-
-    // 计算总权重
-    const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0);
-
-    // 加权随机选择
-    let random = Math.random() * totalWeight;
-    for (const w of weights) {
-      random -= w.weight;
-      if (random <= 0) {
-        return w.groupId;
-      }
-    }
-
-    // fallback
-    return groups[0].groupId;
-  }
-
-  /**
-   * 时间衰减算法：等待时间越长，优先级加成越高
-   */
-  private selectByAging(groups: GroupPriorityInfo[]): string {
-    const now = Date.now();
-
-    // 获取算法专属参数
-    const config = this.algorithmConfig as AgingAlgorithmConfig;
-    const intervalMs = config.intervalMs ?? 60000;
-
-    // 计算带时间加成的优先级
-    const adjustedGroups = groups.map((g) => {
-      let ageBonus = 0;
-      if (g.oldestTimestamp) {
-        const waitTime = now - g.oldestTimestamp;
-        ageBonus = Math.floor(waitTime / intervalMs);
-      }
-      return {
-        groupId: g.groupId,
-        adjustedPriority: g.priority + ageBonus,
-      };
-    });
-
-    // 按调整后的优先级排序
-    adjustedGroups.sort((a, b) => b.adjustedPriority - a.adjustedPriority);
-    return adjustedGroups[0].groupId;
-  }
-
-  async getNextGroup(queue: Queue<any>): Promise<string | null> {
-    // 1. 获取当前所有处于 Ready 状态的 Group
+  async acquireJob(queue: Queue<any>): Promise<ReservedJob<any> | null> {
+    // 1. 获取当前所有处于 Ready 状态的 Group（限制为前 100 个以避免内存溢出）
     const readyGroups = await queue.getReadyGroups(0, 100);
 
     if (readyGroups.length === 0) {
@@ -270,7 +128,7 @@ export class PriorityStrategy implements DispatchStrategy {
         const priority = await this.resolvePriority(queue, groupId);
         const info: GroupPriorityInfo = { groupId, priority };
 
-        // aging 算法需要获取最老任务的时间戳
+        // 仅 aging 算法需要获取额外的时间戳信息
         if (this.algorithmConfig.type === 'aging') {
           info.oldestTimestamp = await queue.getGroupOldestTimestamp(groupId);
         }
@@ -279,15 +137,163 @@ export class PriorityStrategy implements DispatchStrategy {
       }),
     );
 
-    // 3. 根据算法类型选择组
+    // 3. 根据配置的算法对 Group 进行排序
+    const sortedGroupIds = this.sortGroupsByPriority(groupInfos);
+
+    // 4. 循环尝试从排序后的 Group 列表中获取任务
+    for (const groupId of sortedGroupIds) {
+      const result = await queue.reserveAtomic(groupId);
+
+      if (result.status === 'success') {
+        // 成功获取任务，立即返回
+        return result.job;
+      }
+
+      // status === 'limit_exceeded': 该高优组并发已满，立即 continue 尝试下一个次优组
+      // status === 'empty': 该组瞬间被清空，continue 尝试下一个
+    }
+
+    // 5. 所有候选 Group 都无法获取任务（都满了或都空了）
+    return null;
+  }
+
+  /**
+   * 解析组的优先级
+   * 优先级来源顺序：Cache -> onGetPriority -> Redis Config -> Default
+   */
+  private async resolvePriority(
+    queue: Queue<any>,
+    groupId: string,
+  ): Promise<number> {
+    // 1. 检查缓存是否有效
+    const now = Date.now();
+    const cached = this.cache.get(groupId);
+    if (cached && cached.expiresAt > now) {
+      return cached.priority;
+    }
+
+    // 2. 获取基础配置（用于传给 onGetPriority）
+    const config = await queue.getGroupConfig<PriorityStrategyGroupConfig>(groupId);
+
+    // 3. 计算优先级
+    let priority: number;
+    if (this.onGetPriority) {
+      // 如果用户提供了自定义函数，使用它
+      priority = await this.onGetPriority(groupId, config);
+    } else {
+      // 否则使用 Redis 中的配置，若无则使用默认值
+      priority = config.priority !== 1 ? config.priority : this.defaultPriority;
+    }
+
+    // 4. 更新缓存
+    if (this.cacheTtlMs > 0) {
+      this.cache.set(groupId, {
+        priority,
+        expiresAt: now + this.cacheTtlMs,
+      });
+    }
+
+    return priority;
+  }
+
+  /**
+   * 根据算法类型分发排序逻辑
+   */
+  private sortGroupsByPriority(groups: GroupPriorityInfo[]): string[] {
     switch (this.algorithmConfig.type) {
       case 'strict':
-        return this.selectByStrict(groupInfos);
+        return this.sortByStrict(groups);
       case 'aging':
-        return this.selectByAging(groupInfos);
+        return this.sortByAging(groups);
       case 'weighted-random':
       default:
-        return this.selectByWeightedRandom(groupInfos);
+        return this.sortByWeightedRandom(groups);
     }
+  }
+
+  /**
+   * 严格优先级排序：Priority 大的排前面
+   */
+  private sortByStrict(groups: GroupPriorityInfo[]): string[] {
+    // 降序排列
+    const sorted = [...groups].sort((a, b) => b.priority - a.priority);
+    return sorted.map((g) => g.groupId);
+  }
+
+  /**
+   * 加权随机排序：Priority 越高，排在前面的概率越大
+   */
+  private sortByWeightedRandom(groups: GroupPriorityInfo[]): string[] {
+    if (groups.length === 1) return [groups[0].groupId];
+
+    const config = this.algorithmConfig as WeightedRandomAlgorithmConfig;
+    const minWeightRatio = config.minWeightRatio ?? 0.1;
+
+    // 找出最大优先级，用于计算保底权重
+    const maxPriority = Math.max(...groups.map((g) => g.priority));
+    const minWeight = maxPriority * minWeightRatio;
+
+    // 构建权重表
+    const weights = groups.map((g) => ({
+      groupId: g.groupId,
+      weight: Math.max(g.priority, minWeight),
+    }));
+
+    // 依次抽取
+    const result: string[] = [];
+    const remaining = new Map(weights.map((w) => [w.groupId, w.weight]));
+
+    while (remaining.size > 0) {
+      const remainingEntries = Array.from(remaining.entries());
+      const totalWeight = remainingEntries.reduce((sum, [_, w]) => sum + w, 0);
+
+      let random = Math.random() * totalWeight;
+      let selectedGroupId: string | null = null;
+
+      for (const [groupId, weight] of remainingEntries) {
+        random -= weight;
+        if (random <= 0) {
+          selectedGroupId = groupId;
+          break;
+        }
+      }
+
+      // 兜底：浮点数精度问题可能导致没选中，默认选第一个
+      if (!selectedGroupId) {
+        selectedGroupId = remainingEntries[0][0];
+      }
+
+      result.push(selectedGroupId);
+      remaining.delete(selectedGroupId);
+    }
+
+    return result;
+  }
+
+  /**
+   * 时间衰减排序：Priority + 等待时间加成
+   */
+  private sortByAging(groups: GroupPriorityInfo[]): string[] {
+    const now = Date.now();
+    const config = this.algorithmConfig as AgingAlgorithmConfig;
+    const intervalMs = config.intervalMs ?? 60000;
+
+    const adjustedGroups = groups.map((g) => {
+      let ageBonus = 0;
+      if (g.oldestTimestamp) {
+        const waitTime = now - g.oldestTimestamp;
+        // 每过 intervalMs 时间，优先级 +1
+        ageBonus = Math.floor(waitTime / intervalMs);
+      }
+      return {
+        groupId: g.groupId,
+        // 计算最终动态优先级
+        adjustedPriority: g.priority + ageBonus,
+      };
+    });
+
+    // 按调整后的优先级降序排列
+    adjustedGroups.sort((a, b) => b.adjustedPriority - a.adjustedPriority);
+    return adjustedGroups.map((g) => g.groupId);
   }
 }

@@ -50,7 +50,8 @@ if not canReserve then
     local headScore = tonumber(head[2])
     redis.call("ZADD", readyKey, headScore, targetGroupId)
   end
-  return nil
+  -- [PHASE 2 MODIFICATION] 返回明确的 E_LIMIT 标识（并发已满）
+  return "E_LIMIT"
 end
 -- [PHASE 2 MODIFICATION END]
 
