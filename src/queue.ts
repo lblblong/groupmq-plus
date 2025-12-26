@@ -19,6 +19,18 @@ export type GroupConfig = {
 };
 
 /**
+ * 组配置选项（用于 queue.add 的 groupConfig 参数）
+ */
+export type GroupOptions = {
+  /** 组优先级 (被 PriorityStrategy 使用) */
+  priority?: number;
+  /** 并发限制 (被 Core 使用) */
+  concurrency?: number;
+  /** 允许传入任意其他策略需要的元数据 */
+  [key: string]: any;
+};
+
+/**
  * Flow child result type with explicit status
  */
 export type FlowChildResult<R = any> = {
@@ -416,6 +428,20 @@ export type AddOptions<T> = {
    * - Deduplication: Prevent duplicate jobs from being created
    */
   jobId?: string
+
+  /**
+   * (新增) 设置或更新组的配置
+   * 这些配置将随任务一起原子性写入 Redis
+   *
+   * @example { priority: 10 } // 设置组优先级
+   * @example { concurrency: 5 } // 设置组并发限制
+   * @example { priority: 10, concurrency: 3 } // 同时设置多个配置
+   *
+   * **When to use:**
+   * - 入队即配置：在添加任务时同时设置组配置
+   * - 动态调整：根据任务特性动态调整组优先级
+   */
+  groupConfig?: GroupOptions
 }
 
 export type ReservedJob<T = any> = {
@@ -492,6 +518,63 @@ export class Queue<T = any> {
   }> = []
   private batchTimer?: NodeJS.Timeout
   private flushing = false
+
+  // [新增] 组管理命名空间
+  public readonly groups = {
+    /**
+     * 设置组的配置和元数据
+     * 我们将使用 Hash 存储这些配置: groupmq:{ns}:config:{groupId}
+     * @param groupId 组 ID
+     * @param config 配置对象。concurrency 会影响核心调度，其他字段供 Strategy 使用。
+     */
+    setConfig: async (groupId: string, config: GroupOptions) => {
+      const key = `${this.ns}:config:${groupId}`;
+      const args: string[] = [];
+      for (const [k, v] of Object.entries(config)) {
+        if (v !== undefined && v !== null) args.push(k, String(v));
+      }
+      if (args.length > 0) await this.r.hmset(key, ...args);
+    },
+
+    /** 获取当前配置 */
+    getConfig: async (groupId: string): Promise<GroupOptions> => {
+      const key = `${this.ns}:config:${groupId}`;
+      const raw = await this.r.hgetall(key);
+      const config: GroupOptions = {};
+      if (raw) {
+        for (const [k, v] of Object.entries(raw)) {
+          // 数字类型转换
+          if (k === 'concurrency' || k === 'priority') {
+            config[k as keyof GroupOptions] = parseInt(v, 10);
+          } else {
+            const num = Number(v);
+            config[k] = isNaN(num) ? v : num;
+          }
+        }
+      }
+      // 默认并发为 1
+      if (config.concurrency === undefined) config.concurrency = 1;
+      return config;
+    },
+
+    /**
+     * 设置指定组的并发上限
+     * @param groupId 组 ID
+     * @param limit 并发数 (必须 >= 1)
+     */
+    setConcurrency: async (groupId: string, limit: number) => {
+      const validLimit = Math.max(1, Math.floor(limit));
+      await this.r.hset(`${this.ns}:config:${groupId}`, 'concurrency', String(validLimit));
+    },
+
+    /**
+     * 获取指定组的并发上限
+     */
+    getConcurrency: async (groupId: string) => {
+      const c = (await this.groups.getConfig(groupId)).concurrency
+      return c ?? 1
+    }
+  };
 
   // Inline defineCommand bindings removed; using external Lua via evalsha
 
@@ -612,6 +695,7 @@ export class Queue<T = any> {
       maxAttempts,
       orderMs,
       delayMs,
+      groupConfig: opts.groupConfig // [新增] 透传
     })
   }
 
@@ -801,6 +885,7 @@ export class Queue<T = any> {
     maxAttempts: number
     orderMs: number
     delayMs?: number
+    groupConfig?: GroupOptions // [新增]
   }): Promise<JobEntity<T>> {
     const now = Date.now()
 
@@ -811,6 +896,8 @@ export class Queue<T = any> {
     }
 
     const serializedPayload = JSON.stringify(opts.data)
+    // [新增] 序列化组配置
+    const groupConfigStr = opts.groupConfig ? JSON.stringify(opts.groupConfig) : ""
 
     const result = await evalScript<string[] | string>(
       this.r,
@@ -826,6 +913,7 @@ export class Queue<T = any> {
         String(this.keepCompleted),
         String(now), // Pass client timestamp for accurate timing calculations
         String(this.orderingDelayMs), // Pass orderingDelayMs for staging logic
+        groupConfigStr // 传入 groupConfig
       ],
       1
     )
@@ -1820,82 +1908,6 @@ export class Queue<T = any> {
   async getReadyGroups(start = 0, end = -1): Promise<string[]> {
     // groupmq:{ns}:ready 是一个 ZSET，存储 groupId
     return this.r.zrange(`${this.ns}:ready`, start, end)
-  }
-
-  /**
-   * 设置组的配置和元数据
-   * 我们将使用 Hash 存储这些配置: groupmq:{ns}:config:{groupId}
-   * @param groupId 组 ID
-   * @param config 配置对象。concurrency 会影响核心调度，其他字段供 Strategy 使用。
-   */
-  async setGroupConfig(
-    groupId: string,
-    config: GroupConfig
-  ): Promise<void> {
-    const key = `${this.ns}:config:${groupId}`;
-    const args: string[] = [];
-
-    for (const [k, v] of Object.entries(config)) {
-      if (v !== undefined && v !== null) {
-        args.push(k, String(v));
-      }
-    }
-
-    if (args.length > 0) {
-      await this.r.hset(key, ...args);
-    }
-  }
-
-  async getGroupConfig<T extends GroupConfig>(groupId: string): Promise<T> {
-    const key = `${this.ns}:config:${groupId}`;
-    // 获取 Hash 中所有字段
-    const raw = await this.r.hgetall(key);
-
-    const config: GroupConfig = {};
-
-    if (raw) {
-      for (const [k, v] of Object.entries(raw)) {
-        // 特殊处理 concurrency，确保它是数字
-        if (k === 'concurrency') {
-          config.concurrency = parseInt(v, 10);
-        } else {
-          // 尝试自动转数字，如果是纯数字字符串
-          // 或者保持字符串，由使用者自己转换
-          const num = Number(v);
-          config[k] = isNaN(num) ? v : num;
-        }
-      }
-    }
-
-    // 默认值处理：Lua 脚本中默认 concurrency 为 1
-    // 这里为了保持一致性，也可以返回默认值，或者返回空对象让调用者处理
-    if (config.concurrency === undefined) {
-      config.concurrency = 1;
-    }
-
-    return config as T;
-  }
-
-  /**
-   * 设置指定组的并发上限
-   * @param groupId 组 ID
-   * @param limit 并发数 (必须 >= 1)
-   */
-  async setGroupConcurrency(groupId: string, limit: number): Promise<void> {
-    const validLimit = Math.max(1, Math.floor(limit))
-    await this.r.hset(
-      `${this.ns}:config:${groupId}`,
-      'concurrency',
-      String(validLimit)
-    )
-  }
-
-  /**
-   * 获取指定组的并发上限
-   */
-  async getGroupConcurrency(groupId: string): Promise<number> {
-    const val = await this.r.hget(`${this.ns}:config:${groupId}`, 'concurrency')
-    return val ? parseInt(val, 10) : 1
   }
 
   /**

@@ -23,8 +23,8 @@ describe('PriorityStrategy', () => {
       namespace: `${namespace}:strict`,
     });
 
-    await queue.setGroupConfig('group-high', { priority: 100 });
-    await queue.setGroupConfig('group-low', { priority: 1 });
+    await queue.groups.setConfig('group-high', { priority: 100 });
+    await queue.groups.setConfig('group-low', { priority: 1 });
 
     // 先添加低优先级任务
     for (let i = 0; i < 5; i++) {

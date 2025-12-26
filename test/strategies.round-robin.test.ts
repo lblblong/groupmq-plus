@@ -77,9 +77,9 @@ describe('RoundRobinStrategy', () => {
     });
 
     // Group A 限制并发为 1
-    await queue.setGroupConfig('group-limited', { concurrency: 1 });
+    await queue.groups.setConfig('group-limited', { concurrency: 1 });
     // Group B 不限制
-    await queue.setGroupConfig('group-free', { concurrency: 10 });
+    await queue.groups.setConfig('group-free', { concurrency: 10 });
 
     // 添加任务
     // 1. 先加一个长任务占住 limited 组

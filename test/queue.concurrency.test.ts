@@ -467,9 +467,9 @@ describe('Group Concurrency', () => {
   it('should limit concurrency for specific group', async () => {
     const queue = new Queue({ redis, namespace });
     const groupId = 'limited-group';
-    
+
     // 1. 设置该组并发上限为 2
-    await queue.setGroupConcurrency(groupId, 2);
+    await queue.groups.setConcurrency(groupId, 2);
 
     // 2. 添加 5 个耗时任务
     for (let i = 0; i < 5; i++) {
@@ -484,7 +484,7 @@ describe('Group Concurrency', () => {
     const activeJobs: string[] = [];
     const worker = new Worker({
       queue,
-      concurrency: 5, 
+      concurrency: 5,
       handler: async (job) => {
         activeJobs.push(job.id);
         // 模拟耗时，确保能观测到并发数
@@ -503,9 +503,9 @@ describe('Group Concurrency', () => {
     clearInterval(interval);
 
     console.log('Max concurrent jobs observed:', maxConcurrent);
-    
+
     // 理论上应该是 2，但也可能因为时间片采集有轻微误差，允许瞬间到 3 但绝不能到 5
-    expect(maxConcurrent).toBeLessThanOrEqual(3); 
+    expect(maxConcurrent).toBeLessThanOrEqual(3);
     expect(maxConcurrent).toBeGreaterThanOrEqual(2);
 
     await worker.close();

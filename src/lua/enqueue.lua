@@ -1,4 +1,4 @@
--- argv: ns, groupId, dataJson, maxAttempts, orderMs, delayUntil, jobId, keepCompleted, clientTimestamp, orderingDelayMs
+-- argv: ns, groupId, dataJson, maxAttempts, orderMs, delayUntil, jobId, keepCompleted, clientTimestamp, orderingDelayMs, groupConfigJson
 local ns = KEYS[1]
 local groupId = ARGV[1]
 local data = ARGV[2]
@@ -9,6 +9,25 @@ local jobId = ARGV[6]
 local keepCompleted = tonumber(ARGV[7]) or 0
 local clientTimestamp = tonumber(ARGV[8])
 local orderingDelayMs = tonumber(ARGV[9]) or 0
+local groupConfigJson = ARGV[10]
+
+-- [新增逻辑]：原子性更新组配置
+if groupConfigJson and groupConfigJson ~= "" and groupConfigJson ~= "null" then
+  local status, config = pcall(cjson.decode, groupConfigJson)
+  if status and config then
+    local configKey = ns .. ":config:" .. groupId
+    local args = {}
+    for k, v in pairs(config) do
+      if v ~= nil then
+        table.insert(args, k)
+        table.insert(args, tostring(v))
+      end
+    end
+    if #args > 0 then
+      redis.call("HMSET", configKey, unpack(args))
+    end
+  end
+end
 
 local readyKey = ns .. ":ready"
 local delayedKey = ns .. ":delayed"
