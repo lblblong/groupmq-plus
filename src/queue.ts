@@ -7,18 +7,6 @@ import { evalScript } from './lua/loader'
 import type { Status } from './status'
 
 /**
- * Group 的配置信息
- * concurrency 是核心字段，影响 Lua 脚本行为
- * 其他字段为策略层使用的元数据（如 priority, weight 等）
- */
-export type GroupConfig = {
-  /** 并发限制 (Core Engine 使用) */
-  concurrency?: number;
-  /** 允许存储任意元数据供 Strategy 使用 */
-  [key: string]: any;
-};
-
-/**
  * 组配置选项（用于 queue.add 的 groupConfig 参数）
  */
 export type GroupOptions = {
@@ -296,6 +284,10 @@ export type FlowJob<T = any> = {
    * Priority/Order timestamp.
    */
   orderMs?: number
+  /**
+   * (新增) 组配置
+   */
+  groupConfig?: GroupOptions
 }
 
 /**
@@ -716,6 +708,8 @@ export class Queue<T = any> {
     const parentData = JSON.stringify(
       flow.parent.data === undefined ? null : flow.parent.data
     )
+    // [新增] 序列化 Parent 的组配置
+    const parentGroupConfigStr = flow.parent.groupConfig ? JSON.stringify(flow.parent.groupConfig) : ""
 
     const childrenIds: string[] = []
     const childrenArgs: string[] = []
@@ -728,6 +722,8 @@ export class Queue<T = any> {
       const childData = JSON.stringify(
         child.data === undefined ? null : child.data
       )
+      // [新增] 序列化 Child 的组配置
+      const childGroupConfigStr = child.groupConfig ? JSON.stringify(child.groupConfig) : ""
 
       childrenIds.push(childId)
       childrenArgs.push(
@@ -736,14 +732,15 @@ export class Queue<T = any> {
         childData,
         childMaxAttempts.toString(),
         childOrderMs.toString(),
-        childDelay.toString()
+        childDelay.toString(),
+        childGroupConfigStr // [新增] 第7个参数
       )
     }
 
     const now = Date.now()
 
     // KEYS: [ns]
-    // ARGV: [parentId, parentGroupId, parentData, parentMaxAttempts, parentOrderMs, now, ...childrenArgs]
+    // ARGV: [parentId, parentGroupId, parentData, parentMaxAttempts, parentOrderMs, now, parentGroupConfigStr, ...childrenArgs]
     await evalScript(
       this.r,
       'enqueue-flow',
@@ -755,6 +752,7 @@ export class Queue<T = any> {
         parentMaxAttempts.toString(),
         parentOrderMs.toString(),
         now.toString(),
+        parentGroupConfigStr, // [新增] 传入 Parent 配置
         ...childrenArgs,
       ],
       1

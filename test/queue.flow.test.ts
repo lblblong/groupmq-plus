@@ -279,5 +279,166 @@ describe('Parent-Child Flows', () => {
     expect(finalFailedJobs).toContain('child-job-1')
     expect(finalFailedJobs).toContain('child-job-2')
   })
+
+  it('should apply groupConfig to parent and children in a flow', async () => {
+    const queue = new Queue({
+      redis,
+      namespace: `${namespace}-groupconfig`,
+      logger: false,
+    })
+
+    const parentGroupId = 'flow-parent-group'
+    const child1GroupId = 'flow-child-group-1'
+    const child2GroupId = 'flow-child-group-2'
+
+    // Create a flow with groupConfig for parent and children
+    const parent = await queue.addFlow({
+      parent: {
+        groupId: parentGroupId,
+        data: { name: 'parent' },
+        groupConfig: { priority: 100, concurrency: 5 },
+      },
+      children: [
+        {
+          groupId: child1GroupId,
+          data: { name: 'child1' },
+          groupConfig: { priority: 50, concurrency: 2 },
+        },
+        {
+          groupId: child2GroupId,
+          data: { name: 'child2' },
+          groupConfig: { priority: 75, concurrency: 3 },
+        },
+      ],
+    })
+
+    // Verify parent group config was set
+    const parentConfig = await queue.groups.getConfig(parentGroupId)
+    expect(parentConfig.priority).toBe(100)
+    expect(parentConfig.concurrency).toBe(5)
+
+    // Verify child 1 group config was set
+    const child1Config = await queue.groups.getConfig(child1GroupId)
+    expect(child1Config.priority).toBe(50)
+    expect(child1Config.concurrency).toBe(2)
+
+    // Verify child 2 group config was set
+    const child2Config = await queue.groups.getConfig(child2GroupId)
+    expect(child2Config.priority).toBe(75)
+    expect(child2Config.concurrency).toBe(3)
+
+    // Verify the flow works correctly with group configs
+    expect(parent.status).toBe('waiting-children')
+    const remaining = await queue.getFlowDependencies(parent.id)
+    expect(remaining).toBe(2)
+  })
+
+  it('should handle flow with partial groupConfig (only parent)', async () => {
+    const queue = new Queue({
+      redis,
+      namespace: `${namespace}-partial-config`,
+      logger: false,
+    })
+
+    const parentGroupId = 'partial-parent-group'
+    const childGroupId = 'partial-child-group'
+
+    // Create a flow where only parent has groupConfig
+    const parent = await queue.addFlow({
+      parent: {
+        groupId: parentGroupId,
+        data: { name: 'parent' },
+        groupConfig: { priority: 90 },
+      },
+      children: [
+        {
+          groupId: childGroupId,
+          data: { name: 'child' },
+          // No groupConfig for child
+        },
+      ],
+    })
+
+    // Verify parent config was set
+    const parentConfig = await queue.groups.getConfig(parentGroupId)
+    expect(parentConfig.priority).toBe(90)
+
+    // Child group should exist but have no special config
+    const childConfig = await queue.groups.getConfig(childGroupId)
+    // childConfig should be empty or not contain priority
+    expect(childConfig.priority).toBeUndefined()
+  })
+
+  it('should support custom groupConfig properties like weight', async () => {
+    const queue = new Queue({
+      redis,
+      namespace: `${namespace}-custom-config`,
+      logger: false,
+    })
+
+    const parentGroupId = 'custom-parent-group'
+    const child1GroupId = 'custom-child-group-1'
+    const child2GroupId = 'custom-child-group-2'
+
+    // Create a flow with custom groupConfig properties (weight)
+    const parent = await queue.addFlow({
+      parent: {
+        groupId: parentGroupId,
+        data: { name: 'parent' },
+        groupConfig: {
+          priority: 100,
+          concurrency: 5,
+          weight: 10, // Custom property
+          customField: 'custom-value' // Another custom property
+        },
+      },
+      children: [
+        {
+          groupId: child1GroupId,
+          data: { name: 'child1' },
+          groupConfig: {
+            priority: 50,
+            concurrency: 2,
+            weight: 5 // Custom property
+          },
+        },
+        {
+          groupId: child2GroupId,
+          data: { name: 'child2' },
+          groupConfig: {
+            priority: 75,
+            concurrency: 3,
+            weight: 8, // Custom property
+            routingKey: 'route-key' // Another custom property
+          },
+        },
+      ],
+    })
+
+    // Verify parent config including custom properties
+    const parentConfig = await queue.groups.getConfig(parentGroupId)
+    expect(parentConfig.priority).toBe(100)
+    expect(parentConfig.concurrency).toBe(5)
+    expect(parentConfig.weight).toBe(10)
+    expect(parentConfig.customField).toBe('custom-value')
+
+    // Verify child 1 config with custom properties
+    const child1Config = await queue.groups.getConfig(child1GroupId)
+    expect(child1Config.priority).toBe(50)
+    expect(child1Config.concurrency).toBe(2)
+    expect(child1Config.weight).toBe(5)
+
+    // Verify child 2 config with multiple custom properties
+    const child2Config = await queue.groups.getConfig(child2GroupId)
+    expect(child2Config.priority).toBe(75)
+    expect(child2Config.concurrency).toBe(3)
+    expect(child2Config.weight).toBe(8)
+    expect(child2Config.routingKey).toBe('route-key')
+
+    // Verify the flow works correctly with custom configs
+    expect(parent.status).toBe('waiting-children')
+    const remaining = await queue.getFlowDependencies(parent.id)
+    expect(remaining).toBe(2)
+  })
 })
 

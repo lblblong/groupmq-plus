@@ -1,7 +1,7 @@
 -- Atomic Flow Creation
 -- KEYS: [ns]
--- ARGV: [parentId, parentGroupId, parentData, parentMaxAttempts, parentOrderMs, now, ...childrenArgs]
--- childrenArgs: [id, groupId, data, maxAttempts, orderMs, delay, ...] (6 fields per child)
+-- ARGV: [parentId, parentGroupId, parentData, parentMaxAttempts, parentOrderMs, now, parentGroupConfig, ...childrenArgs]
+-- childrenArgs: [id, groupId, data, maxAttempts, orderMs, delay, groupConfig, ...] (7 fields per child)
 
 local ns = KEYS[1]
 local parentId = ARGV[1]
@@ -10,6 +10,7 @@ local parentData = ARGV[3]
 local parentMaxAttempts = ARGV[4]
 local parentOrderMs = tonumber(ARGV[5])
 local now = tonumber(ARGV[6])
+local parentGroupConfig = ARGV[7] -- [新增] Parent 组配置
 
 local baseEpoch = 1704067200000
 local parentKey = ns .. ":job:" .. parentId
@@ -21,7 +22,26 @@ if redis.call("EXISTS", uniqueKey) == 1 then
 end
 redis.call("SET", uniqueKey, parentId)
 
-local childrenCount = (#ARGV - 6) / 6
+-- [新增] 更新 Parent 组配置
+if parentGroupConfig and parentGroupConfig ~= "" and parentGroupConfig ~= "null" then
+  local status, config = pcall(cjson.decode, parentGroupConfig)
+  if status and config then
+    local configKey = ns .. ":config:" .. parentGroupId
+    local args = {}
+    for k, v in pairs(config) do
+      if v ~= nil then
+        table.insert(args, k)
+        table.insert(args, tostring(v))
+      end
+    end
+    if #args > 0 then
+      redis.call("HMSET", configKey, unpack(args))
+    end
+  end
+end
+
+-- 计算 Children 数量 (总参数减去 Parent 的 7 个参数，除以每个 Child 的 7 个参数)
+local childrenCount = (#ARGV - 7) / 7
 
 -- 1. Setup Parent Job
 -- Status is 'waiting-children', NOT 'waiting'. It is NOT added to ready queue yet.
@@ -50,14 +70,33 @@ redis.call("HMSET", parentKey,
 local results = {}
 
 for i = 0, childrenCount - 1 do
-  local offset = 6 + (i * 6)
+  local offset = 7 + (i * 7) -- 偏移量从 7 开始，步长 7
   local childId = ARGV[offset + 1]
   local childGroupId = ARGV[offset + 2]
   local childData = ARGV[offset + 3]
   local childMaxAttempts = ARGV[offset + 4]
   local childOrderMs = tonumber(ARGV[offset + 5])
   local childDelay = tonumber(ARGV[offset + 6])
+  local childGroupConfig = ARGV[offset + 7] -- [新增] Child 组配置
   
+  -- [新增] 更新 Child 组配置
+  if childGroupConfig and childGroupConfig ~= "" and childGroupConfig ~= "null" then
+    local status, config = pcall(cjson.decode, childGroupConfig)
+    if status and config then
+      local configKey = ns .. ":config:" .. childGroupId
+      local args = {}
+      for k, v in pairs(config) do
+        if v ~= nil then
+          table.insert(args, k)
+          table.insert(args, tostring(v))
+        end
+      end
+      if #args > 0 then
+        redis.call("HMSET", configKey, unpack(args))
+      end
+    end
+  end
+
   local childKey = ns .. ":job:" .. childId
   
   -- Generate score (replicate enqueue.lua logic)
