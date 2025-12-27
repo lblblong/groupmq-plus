@@ -19,6 +19,9 @@ local jobKey = ns .. ":job:" .. jobId
 local parentId = redis.call("HGET", jobKey, "parentId")
 -- [PHASE 3 MODIFICATION END]
 
+local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
+
 -- Verify job exists and check current status to prevent race conditions
 local currentStatus = redis.call("HGET", jobKey, "status")
 if not currentStatus then
@@ -64,11 +67,24 @@ if parentId then
       redis.call("ZADD", pGZ, parentScore, parentId)
       redis.call("SADD", ns .. ":groups", parentGroupId)
       
-      -- Add to ready if head
+      -- [LIMITED GROUP SET] Check parent group capacity
       local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
       if pHead and #pHead >= 2 then
          local pHeadScore = tonumber(pHead[2])
-         redis.call("ZADD", ns .. ":ready", pHeadScore, parentGroupId)
+         local pGroupActiveKey = ns .. ":g:" .. parentGroupId .. ":active"
+         local pConfigKey = ns .. ":config:" .. parentGroupId
+         local pLimit = tonumber(redis.call("HGET", pConfigKey, "concurrency")) or 1
+         local pCurrentActive = redis.call("LLEN", pGroupActiveKey)
+         
+         if pCurrentActive >= pLimit then
+           -- Parent group is full, move to limited
+           redis.call("ZREM", readyKey, parentGroupId)
+           redis.call("ZADD", limitedKey, pHeadScore, parentGroupId)
+         else
+           -- Parent group has slots, move to ready
+           redis.call("ZREM", limitedKey, parentGroupId)
+           redis.call("ZADD", readyKey, pHeadScore, parentGroupId)
+         end
       end
     end
   end

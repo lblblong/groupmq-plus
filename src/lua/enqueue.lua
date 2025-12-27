@@ -31,6 +31,7 @@ end
 
 local readyKey = ns .. ":ready"
 local delayedKey = ns .. ":delayed"
+local limitedKey = ns .. ":limited"
 local stageKey = ns .. ":stage"
 local timerKey = ns .. ":stage:timer"
 local jobKey = ns .. ":job:" .. jobId
@@ -155,14 +156,29 @@ elseif orderMs and orderingDelayMs > 0 then
     redis.call("SET", timerKey, "1", "PX", ttlMs)
   end
 else
-  -- Job is not delayed and not staged, add to group set and make ready
+  -- Job is not delayed and not staged, add to group set and check concurrency
   redis.call("ZADD", gZ, score, jobId)
   jobStatus = "waiting"
   redis.call("HSET", jobKey, "status", jobStatus)
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    redis.call("ZADD", readyKey, headScore, groupId)
+    -- [LIMITED GROUP SET] Check concurrency limit for new task placement
+    local configKey = ns .. ":config:" .. groupId
+    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+    local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+    local activeCount = redis.call("LLEN", groupActiveKey)
+    
+    if activeCount >= limit then
+      -- Group is at capacity, add to limited instead of ready
+      redis.call("ZREM", readyKey, groupId)
+      redis.call("ZADD", limitedKey, headScore, groupId)
+    else
+      -- Group has capacity, add to ready
+      -- IMPORTANT: If group was in limited, move it out since new higher-priority task may be available
+      redis.call("ZREM", limitedKey, groupId)
+      redis.call("ZADD", readyKey, headScore, groupId)
+    end
   end
 end
 

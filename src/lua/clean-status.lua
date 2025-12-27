@@ -19,6 +19,9 @@ end
 -- Fetch up to 'limit' job ids with score <= graceAt
 local ids = redis.call('ZRANGEBYSCORE', setKey, '-inf', graceAt, 'LIMIT', 0, limit)
 
+local readyKey = ns .. ':ready'
+local limitedKey = ns .. ':limited'
+
 local removed = 0
 for i = 1, #ids do
   local id = ids[i]
@@ -33,21 +36,26 @@ for i = 1, #ids do
   local parentId = redis.call('HGET', jobKey, 'parentId')
   if groupId then
     local gZ = ns .. ':g:' .. groupId
-    local readyKey = ns .. ':ready'
     redis.call('ZREM', gZ, id)
     local jobCount = redis.call('ZCARD', gZ)
     if jobCount == 0 then
       redis.call('ZREM', readyKey, groupId)
+      redis.call('ZREM', limitedKey, groupId)
       -- Clean up empty group
       redis.call('DEL', gZ)
       redis.call('SREM', ns .. ':groups', groupId)
     elseif status == 'delayed' then
-      -- Only update ready queue score for delayed jobs
-      -- (completed/failed jobs shouldn't affect ready queue)
+      -- Only update ready/limited queue score for delayed jobs
+      -- (completed/failed jobs shouldn't affect ready/limited queue)
       local head = redis.call('ZRANGE', gZ, 0, 0, 'WITHSCORES')
       if head and #head >= 2 then
         local headScore = tonumber(head[2])
-        redis.call('ZADD', readyKey, headScore, groupId)
+        -- Update whichever queue the group is in (ready or limited)
+        if redis.call('ZSCORE', readyKey, groupId) then
+          redis.call('ZADD', readyKey, headScore, groupId)
+        elseif redis.call('ZSCORE', limitedKey, groupId) then
+          redis.call('ZADD', limitedKey, headScore, groupId)
+        end
       end
     end
   end

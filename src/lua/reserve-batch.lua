@@ -6,6 +6,7 @@ local maxBatch = tonumber(ARGV[3]) or 16
 
 local readyKey = ns .. ":ready"
 local processingKey = ns .. ":processing"
+local limitedKey = ns .. ":limited"
 
 -- Early exit if paused
 if redis.call("GET", ns .. ":paused") then
@@ -125,6 +126,15 @@ for i = 1, #groups, 2 do
           end
         end
       end
+    end
+  else
+    -- Group is full, move to limited if it has waiting tasks
+    -- [LIMITED GROUP SET]
+    local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+    if nextHead and #nextHead >= 2 then
+      local nextScore = tonumber(nextHead[2])
+      redis.call("ZREM", readyKey, gid)
+      redis.call("ZADD", limitedKey, nextScore, gid)
     end
   end
   -- [PHASE 2 MODIFICATION END]

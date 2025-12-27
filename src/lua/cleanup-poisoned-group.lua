@@ -4,6 +4,7 @@ local groupId = ARGV[1]
 local now = tonumber(ARGV[2])
 
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 local gZ = ns .. ":g:" .. groupId
 local lockKey = ns .. ":lock:" .. groupId
 
@@ -38,6 +39,7 @@ end
 
 if reservableJobs == 0 then
   redis.call("ZREM", readyKey, groupId)
+  redis.call("ZREM", limitedKey, groupId)
   return "poisoned"
 end
 

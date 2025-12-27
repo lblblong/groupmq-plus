@@ -15,6 +15,8 @@ local parentGroupConfig = ARGV[7] -- [新增] Parent 组配置
 local baseEpoch = 1704067200000
 local parentKey = ns .. ":job:" .. parentId
 local uniqueKey = ns .. ":unique:" .. parentId
+local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 
 -- Check idempotence for parent
 if redis.call("EXISTS", uniqueKey) == 1 then
@@ -141,7 +143,21 @@ for i = 0, childrenCount - 1 do
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
       local headScore = tonumber(head[2])
-      redis.call("ZADD", ns .. ":ready", headScore, childGroupId)
+      local groupActiveKey = ns .. ":g:" .. childGroupId .. ":active"
+      local configKey = ns .. ":config:" .. childGroupId
+      local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+      local currentActive = redis.call("LLEN", groupActiveKey)
+      
+      -- [LIMITED GROUP SET] Check group capacity
+      if currentActive >= limit then
+        -- Child group is full, add to limited
+        redis.call("ZREM", readyKey, childGroupId)
+        redis.call("ZADD", limitedKey, headScore, childGroupId)
+      else
+        -- Child group has capacity, add to ready
+        redis.call("ZREM", limitedKey, childGroupId)
+        redis.call("ZADD", readyKey, headScore, childGroupId)
+      end
     end
   end
   

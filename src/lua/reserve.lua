@@ -5,6 +5,7 @@ local vt = tonumber(ARGV[2])
 local scanLimit = tonumber(ARGV[3]) or 20
 
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 
 -- Respect paused state
 if redis.call("GET", ns .. ":paused") then
@@ -46,7 +47,21 @@ if (not groups or #groups == 0) or shouldCheckStalled then
         local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
         if head and #head >= 2 then
           local headScore = tonumber(head[2])
-          redis.call("ZADD", readyKey, headScore, gid)
+          -- [LIMITED GROUP SET] Check group capacity after stalled recovery
+          local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+          local configKey = ns .. ":config:" .. gid
+          local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+          local currentActive = redis.call("LLEN", groupActiveKey)
+          
+          if currentActive >= limit then
+            -- Group is still full, add to limited instead of ready
+            redis.call("ZREM", readyKey, gid)
+            redis.call("ZADD", limitedKey, headScore, gid)
+          else
+            -- Group has capacity, add to ready
+            redis.call("ZREM", limitedKey, gid)
+            redis.call("ZADD", readyKey, headScore, gid)
+          end
         end
         redis.call("DEL", ns .. ":lock:" .. gid)
         redis.call("DEL", procKey)
@@ -72,7 +87,15 @@ local job = nil
 
 -- Try to atomically acquire a group and its head job
 -- BullMQ-style: use per-group active list instead of group locks
+-- Process up to scanLimit groups, but continue scanning if we encounter full groups
+local processedCount = 0
+local maxProcessed = scanLimit * 2  -- Process up to 2x scanLimit groups to handle full ones
+
 for i = 1, #groups, 2 do
+  if processedCount >= maxProcessed then
+    break  -- Safety: don't process too many groups in one call
+  end
+  
   local gid = groups[i]
   local gZ = ns .. ":g:" .. gid
   local groupActiveKey = ns .. ":g:" .. gid .. ":active"
@@ -112,8 +135,21 @@ for i = 1, #groups, 2 do
         end
       end
     end
+  else
+    -- Group is full, move to limited if it has waiting tasks
+    -- [LIMITED GROUP SET]
+    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+    if head and #head >= 2 then
+      local headScore = tonumber(head[2])
+      if redis.call("ZCARD", gZ) > 0 then
+        redis.call("ZREM", readyKey, gid)
+        redis.call("ZADD", limitedKey, headScore, gid)
+      end
+    end
   end
   -- [PHASE 2 MODIFICATION END]
+  
+  processedCount = processedCount + 1
 end
 
 if not chosenGid or not job then

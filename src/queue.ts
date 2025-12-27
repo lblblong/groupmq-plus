@@ -555,8 +555,67 @@ export class Queue<T = any> {
      * @param limit 并发数 (必须 >= 1)
      */
     setConcurrency: async (groupId: string, limit: number) => {
-      const validLimit = Math.max(1, Math.floor(limit));
-      await this.r.hset(`${this.ns}:config:${groupId}`, 'concurrency', String(validLimit));
+      // Allow 0 as a valid value (will pause the group), but ensure it's a whole number
+      const validLimit = Math.floor(limit);
+      if (validLimit < 0) {
+        throw new Error("Concurrency limit must be >= 0");
+      }
+      const ns = this.ns;
+
+      // Use Lua to atomically update concurrency and check if group should move from limited to ready
+      const script = `
+        local ns = KEYS[1]
+        local gid = ARGV[1]
+        local newLimit = tonumber(ARGV[2])
+        local configKey = ns .. ":config:" .. gid
+        local limitedKey = ns .. ":limited"
+        local readyKey = ns .. ":ready"
+        local activeKey = ns .. ":g:" .. gid .. ":active"
+        local gZ = ns .. ":g:" .. gid
+
+        redis.call("HSET", configKey, "concurrency", newLimit)
+        
+        local currentActive = redis.call("LLEN", activeKey)
+        
+        -- If newLimit is 0, group should stay in limited indefinitely
+        if newLimit == 0 then
+          -- Remove from ready, keep/add to limited if has jobs
+          if redis.call("ZCARD", gZ) > 0 then
+            local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+            if head and #head >= 2 then
+              local headScore = tonumber(head[2])
+              redis.call("ZREM", readyKey, gid)
+              redis.call("ZADD", limitedKey, headScore, gid)
+            end
+          end
+          return 0
+        end
+        
+        if currentActive < newLimit then
+          -- Check if group is in limited set
+          if redis.call("ZSCORE", limitedKey, gid) then
+            -- Get the current head job score (use latest score, not stale limited score)
+            local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+            local headScore = nil
+            if head and #head >= 2 then
+              headScore = tonumber(head[2])
+            end
+            
+            if headScore then
+              redis.call("ZREM", limitedKey, gid)
+              redis.call("ZADD", readyKey, headScore, gid)
+              return 1
+            else
+              -- Group has no jobs, clean up from limited
+              redis.call("ZREM", limitedKey, gid)
+              return 0
+            end
+          end
+        end
+        return 0
+      `;
+
+      await this.r.eval(script, 1, ns, groupId, String(validLimit));
     },
 
     /**
@@ -2310,6 +2369,100 @@ export class Queue<T = any> {
       'waiting-children': 0,
       prioritized: 0,
     }
+  }
+
+  /**
+   * [LIMITED GROUP SET] Get count of groups in limited set (groups with full capacity)
+   */
+  async getLimitedGroupCount(): Promise<number> {
+    return this.r.zcard(`${this.ns}:limited`)
+  }
+
+  /**
+   * [LIMITED GROUP SET] Get list of groups in limited set
+   */
+  async getLimitedGroups(): Promise<string[]> {
+    return this.r.zrange(`${this.ns}:limited`, 0, -1)
+  }
+
+  /**
+   * [LIMITED GROUP SET] Validate the limited set for consistency
+   * Returns validation report with invalid and missing entries
+   */
+  async validateLimitedSet(): Promise<{
+    total: number
+    valid: number
+    invalid: Array<{ gid: string; reason: string; jobCount: number; activeCount: number; limit: number }>
+    missing: Array<{ gid: string; jobCount: number; activeCount: number; limit: number }>
+  }> {
+    try {
+      const result = await evalScript<string>(
+        this.r,
+        'validate-limited-set',
+        [this.ns],
+        1
+      )
+      return JSON.parse(result)
+    } catch (error) {
+      this.logger.error('Failed to validate limited set', { error })
+      throw error
+    }
+  }
+
+  /**
+   * [LIMITED GROUP SET] Automatically fix invalid entries in the limited set
+   * Rebuilds the limited set based on current activeCount vs concurrency limit
+   */
+  async rebuildLimitedSet(): Promise<number> {
+    let fixed = 0
+    const groups = await this.r.smembers(`${this.ns}:groups`)
+    const limitedKey = `${this.ns}:limited`
+    const readyKey = `${this.ns}:ready`
+
+    for (const gid of groups) {
+      const gZ = `${this.ns}:g:${gid}`
+      const groupActiveKey = `${this.ns}:g:${gid}:active`
+      const configKey = `${this.ns}:config:${gid}`
+
+      const [jobCount, activeCount, concurrencyStr] = await Promise.all([
+        this.r.zcard(gZ),
+        this.r.llen(groupActiveKey),
+        this.r.hget(configKey, 'concurrency')
+      ])
+
+      const limit = parseInt(concurrencyStr || '1', 10)
+      const headScore = await this.r.zscore(gZ,
+        (await this.r.zrange(gZ, 0, 0))[0] || ''
+      )
+
+      if (jobCount === 0) {
+        // Empty group: remove from both ready and limited
+        if (await this.r.zrem(readyKey, gid)) fixed++
+        if (await this.r.zrem(limitedKey, gid)) fixed++
+      } else if (activeCount >= limit && headScore !== null) {
+        // At capacity: should be in limited, not ready
+        const isInReady = await this.r.zscore(readyKey, gid)
+        const isInLimited = await this.r.zscore(limitedKey, gid)
+
+        if (isInReady || !isInLimited) {
+          await this.r.zrem(readyKey, gid)
+          await this.r.zadd(limitedKey, headScore, gid)
+          fixed++
+        }
+      } else if (activeCount < limit && headScore !== null) {
+        // Has capacity: should be in ready, not limited
+        const isInLimited = await this.r.zscore(limitedKey, gid)
+        const isInReady = await this.r.zscore(readyKey, gid)
+
+        if (isInLimited || !isInReady) {
+          await this.r.zrem(limitedKey, gid)
+          await this.r.zadd(readyKey, headScore, gid)
+          fixed++
+        }
+      }
+    }
+
+    return fixed
   }
 
   /**

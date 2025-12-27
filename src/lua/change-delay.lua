@@ -12,6 +12,7 @@ end
 local jobKey = ns .. ":job:" .. jobId
 local delayedKey = ns .. ":delayed"
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 
 -- Check if job exists
 local exists = redis.call("EXISTS", jobKey)
@@ -56,11 +57,24 @@ else
     -- Remove from delayed
     redis.call("ZREM", delayedKey, jobId)
   end
-  -- If this is the head job, ensure group is in ready
+  -- [LIMITED GROUP SET] If this is the head job, check group capacity
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 and head[1] == jobId then
     local headScore = tonumber(head[2])
-    redis.call("ZADD", readyKey, headScore, groupId)
+    local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+    local configKey = ns .. ":config:" .. groupId
+    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+    local currentActive = redis.call("LLEN", groupActiveKey)
+    
+    if currentActive >= limit then
+      -- Group is full, move to limited
+      redis.call("ZREM", readyKey, groupId)
+      redis.call("ZADD", limitedKey, headScore, groupId)
+    else
+      -- Group has slots, move to ready
+      redis.call("ZREM", limitedKey, groupId)
+      redis.call("ZADD", readyKey, headScore, groupId)
+    end
   end
 end
 

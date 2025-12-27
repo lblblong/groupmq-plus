@@ -6,6 +6,7 @@ local limit = tonumber(ARGV[2]) or 100
 
 local stageKey = ns .. ":stage"
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 local timerKey = ns .. ":stage:timer"
 
 local promotedCount = 0
@@ -44,9 +45,22 @@ for i = 1, #readyJobs do
       local headJobKey = ns .. ":job:" .. headJobId
       local headStatus = redis.call("HGET", headJobKey, "status")
       
-      -- Only add to ready if head is waiting (not delayed/staged)
+      -- [LIMITED GROUP SET] Check if head job is waiting and evaluate capacity
       if headStatus == "waiting" then
-        redis.call("ZADD", readyKey, headScore, groupId)
+        local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+        local configKey = ns .. ":config:" .. groupId
+        local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+        local currentActive = redis.call("LLEN", groupActiveKey)
+        
+        if currentActive >= limit then
+          -- Group is full, move to limited
+          redis.call("ZREM", readyKey, groupId)
+          redis.call("ZADD", limitedKey, headScore, groupId)
+        else
+          -- Group has slots, move to ready
+          redis.call("ZREM", limitedKey, groupId)
+          redis.call("ZADD", readyKey, headScore, groupId)
+        end
       end
     end
     

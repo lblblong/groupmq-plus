@@ -5,6 +5,7 @@ local jobId = ARGV[1]
 local jobKey = ns .. ":job:" .. jobId
 local delayedKey = ns .. ":delayed"
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 local processingKey = ns .. ":processing"
 
 -- If job does not exist, return 0
@@ -35,6 +36,7 @@ if groupId then
   local jobCount = redis.call("ZCARD", gZ)
   if jobCount == 0 then
     redis.call("ZREM", readyKey, groupId)
+    redis.call("ZREM", limitedKey, groupId)
     -- Clean up empty group
     redis.call("DEL", gZ)
     redis.call("SREM", ns .. ":groups", groupId)
@@ -42,7 +44,21 @@ if groupId then
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
       local headScore = tonumber(head[2])
-      redis.call("ZADD", readyKey, headScore, groupId)
+      local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+      local configKey = ns .. ":config:" .. groupId
+      local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+      local currentActive = redis.call("LLEN", groupActiveKey)
+      
+      -- [LIMITED GROUP SET] Check group's current queue position and update accordingly
+      if currentActive >= limit then
+        -- Group is still full, keep it in limited (or add to limited)
+        redis.call("ZREM", readyKey, groupId)
+        redis.call("ZADD", limitedKey, headScore, groupId)
+      else
+        -- Group has capacity now, move to ready
+        redis.call("ZREM", limitedKey, groupId)
+        redis.call("ZADD", readyKey, headScore, groupId)
+      end
     end
   end
 end

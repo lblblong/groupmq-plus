@@ -4,6 +4,8 @@ local jobId = ARGV[1]
 local backoffMs = tonumber(ARGV[2]) or 0
 
 local jobKey = ns .. ":job:" .. jobId
+local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 local gid = redis.call("HGET", jobKey, "groupId")
 local attempts = tonumber(redis.call("HINCRBY", jobKey, "attempts", 1))
 local maxAttempts = tonumber(redis.call("HGET", jobKey, "maxAttempts"))
@@ -41,12 +43,24 @@ else
   -- No backoff - immediate retry
   redis.call("HSET", jobKey, "status", "waiting")
   
-  -- Add group to ready queue
+  -- [LIMITED GROUP SET] Check if group is full and update ready/limited accordingly
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    local readyKey = ns .. ":ready"
-    redis.call("ZADD", readyKey, headScore, gid)
+    local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+    local configKey = ns .. ":config:" .. gid
+    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+    local currentActive = redis.call("LLEN", groupActiveKey)
+    
+    if currentActive >= limit then
+      -- Group is full, move to limited
+      redis.call("ZREM", readyKey, gid)
+      redis.call("ZADD", limitedKey, headScore, gid)
+    else
+      -- Group has slots, move to ready
+      redis.call("ZREM", limitedKey, gid)
+      redis.call("ZADD", readyKey, headScore, gid)
+    end
   end
 end
 

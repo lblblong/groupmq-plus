@@ -22,6 +22,8 @@ redis.call("SET", circuitBreakerKey, now, "PX", 3000)
 
 local processingKey = ns .. ":processing"
 local groupsKey = ns .. ":groups"
+local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 
 -- Candidates: jobs whose deadlines are past
 local candidates = redis.call("ZRANGEBYSCORE", processingKey, 0, now - gracePeriod, "LIMIT", 0, 100)
@@ -70,7 +72,19 @@ for _, jobId in ipairs(candidates) do
             local head = redis.call("ZRANGE", groupKey2, 0, 0, "WITHSCORES")
             if head and #head >= 2 then
               local headScore = tonumber(head[2])
-              redis.call("ZADD", ns .. ":ready", headScore, groupId)
+              local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+              local configKey = ns .. ":config:" .. groupId
+              local currentActive = redis.call("LLEN", groupActiveKey)
+              local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+              
+              -- [LIMITED GROUP SET] Check if group can go to ready or should stay in limited
+              if currentActive < limit then
+                redis.call("ZREM", limitedKey, groupId)
+                redis.call("ZADD", readyKey, headScore, groupId)
+              else
+                redis.call("ZREM", readyKey, groupId)
+                redis.call("ZADD", limitedKey, headScore, groupId)
+              end
             end
             redis.call("SADD", groupsKey, groupId)
           end

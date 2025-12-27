@@ -17,6 +17,7 @@ local stageKey = ns .. ":stage"
 local readyKey = ns .. ":ready"
 local delayedKey = ns .. ":delayed"
 local groupsKey = ns .. ":groups"
+local limitedKey = ns .. ":limited"
 local timerKey = ns .. ":stage:timer"
 
 local baseEpoch = 1704067200000
@@ -131,7 +132,27 @@ for groupId, _ in pairs(groupsToUpdate) do
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    redis.call("ZADD", readyKey, headScore, groupId)
+    
+    -- [LIMITED GROUP SET] Check if group is already in limited
+    local isLimited = redis.call("ZSCORE", limitedKey, groupId)
+    
+    if isLimited then
+      -- Group already in limited, don't move it to ready
+    else
+      -- Group not in limited, check capacity
+      local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+      local configKey = ns .. ":config:" .. groupId
+      local currentActive = redis.call("LLEN", groupActiveKey)
+      local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+      
+      if currentActive >= limit then
+        -- Group is full, add to limited
+        redis.call("ZADD", limitedKey, headScore, groupId)
+      else
+        -- Group has capacity, add to ready
+        redis.call("ZADD", readyKey, headScore, groupId)
+      end
+    end
   end
 end
 

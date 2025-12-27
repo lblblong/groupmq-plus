@@ -7,6 +7,7 @@ local targetGroupId = ARGV[3]
 local allowedJobId = ARGV[4] -- If provided, allow reserve if matches active job (chaining)
 
 local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
 local gZ = ns .. ":g:" .. targetGroupId
 local groupActiveKey = ns .. ":g:" .. targetGroupId .. ":active"
 local configKey = ns .. ":config:" .. targetGroupId
@@ -43,12 +44,16 @@ end
 
 if not canReserve then
   -- Group is full and no special access granted
-  -- If head matches our allowedJobId but we failed (shouldn't happen logic-wise but safe-guard),
-  -- ensure ready queue is correct.
+  -- [LIMITED GROUP SET] Move group to limited if it has waiting tasks
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    redis.call("ZADD", readyKey, headScore, targetGroupId)
+    -- Check if group has any waiting tasks
+    if redis.call("ZCARD", gZ) > 0 then
+      -- Move to limited instead of ready
+      redis.call("ZREM", readyKey, targetGroupId)
+      redis.call("ZADD", limitedKey, headScore, targetGroupId)
+    end
   end
   -- [PHASE 2 MODIFICATION] 返回明确的 E_LIMIT 标识（并发已满）
   return "E_LIMIT"

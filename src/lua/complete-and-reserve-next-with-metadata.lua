@@ -16,14 +16,11 @@ local maxAttempts = ARGV[11]
 local now = tonumber(ARGV[12])
 local vt = tonumber(ARGV[13])
 
-local jobKey = ns .. ":job:" .. completedJobId
-
--- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
-local parentId = redis.call("HGET", jobKey, "parentId")
--- [PHASE 3 MODIFICATION END]
-
--- Part 1: Atomically verify and mark completion (prevent duplicate processing)
 local processingKey = ns .. ":processing"
+local readyKey = ns .. ":ready"
+local limitedKey = ns .. ":limited"
+
+local jobKey = ns .. ":job:" .. completedJobId
 
 -- CRITICAL: Check both status AND processing set membership atomically
 -- This prevents race with stalled job recovery
@@ -34,6 +31,10 @@ local stillInProcessing = redis.call("ZSCORE", processingKey, completedJobId)
 if jobStatus ~= "processing" or not stillInProcessing then
   return nil
 end
+
+-- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
+local parentId = redis.call("HGET", jobKey, "parentId")
+-- [PHASE 3 MODIFICATION END]
 
 -- Atomically mark as completed and remove from processing
 -- This prevents stalled checker from racing with us
@@ -80,11 +81,24 @@ if status == "completed" then
         redis.call("ZADD", pGZ, parentScore, parentId)
         redis.call("SADD", ns .. ":groups", parentGroupId)
         
-        -- Check if should add to ready queue (if head)
+        -- [LIMITED GROUP SET] Check if should add to ready or limited queue (if head)
         local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
         if pHead and #pHead >= 2 then
            local pHeadScore = tonumber(pHead[2])
-           redis.call("ZADD", ns .. ":ready", pHeadScore, parentGroupId)
+           local pGroupActiveKey = ns .. ":g:" .. parentGroupId .. ":active"
+           local pConfigKey = ns .. ":config:" .. parentGroupId
+           local pLimit = tonumber(redis.call("HGET", pConfigKey, "concurrency")) or 1
+           local pCurrentActive = redis.call("LLEN", pGroupActiveKey)
+           
+           if pCurrentActive >= pLimit then
+             -- Parent group is full, move to limited
+             redis.call("ZREM", readyKey, parentGroupId)
+             redis.call("ZADD", limitedKey, pHeadScore, parentGroupId)
+           else
+             -- Parent group has slots, move to ready
+             redis.call("ZREM", limitedKey, parentGroupId)
+             redis.call("ZADD", readyKey, pHeadScore, parentGroupId)
+           end
         end
       end
     end
@@ -185,7 +199,8 @@ if not zpop or #zpop == 0 then
   if jobCount == 0 then
     redis.call("DEL", gZ)
     redis.call("SREM", ns .. ":groups", gid)
-    redis.call("ZREM", ns .. ":ready", gid)
+    redis.call("ZREM", readyKey, gid)
+    redis.call("ZREM", limitedKey, gid)
   end
   -- No next job
   return nil
@@ -203,7 +218,6 @@ if not id or id == false then
   local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if nextHead and #nextHead >= 2 then
     local nextScore = tonumber(nextHead[2])
-    local readyKey = ns .. ":ready"
     redis.call("ZADD", readyKey, nextScore, groupId)
   end
   
@@ -224,11 +238,17 @@ redis.call("ZADD", processingKey, deadline, id)
 -- Mark next job as processing for accurate stalled detection
 redis.call("HSET", nextJobKey, "status", "processing")
 
-local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-if nextHead and #nextHead >= 2 then
-  local nextScore = tonumber(nextHead[2])
-  local readyKey = ns .. ":ready"
-  redis.call("ZADD", readyKey, nextScore, groupId)
+-- [LIMITED GROUP SET] Update ready/limited status
+local configKey = ns .. ":config:" .. gid
+local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+local currentActive = redis.call("LLEN", groupActiveKey)
+
+if currentActive < limit then
+  redis.call("ZREM", limitedKey, groupId)
+  redis.call("ZADD", readyKey, score, groupId)
+elseif currentActive >= limit then
+  redis.call("ZREM", readyKey, groupId)
+  redis.call("ZADD", limitedKey, score, groupId)
 end
 
 return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")
