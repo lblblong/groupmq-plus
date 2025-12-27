@@ -37,22 +37,18 @@ describe('PriorityStrategy', () => {
 
     const processedGroups: string[] = [];
 
-    // 使用 Strict 模式，且并发为 1 以验证顺序
+    // 使用客户端 Strict 模式，且并发为 1 以验证顺序
     const worker = new Worker({
       queue,
       concurrency: 1,
       strategy: new PriorityStrategy({
-        algorithm: { type: 'strict' },
-        cacheTtlMs: 0, // 禁用缓存确保立即生效
+        algorithm: { type: 'probability', topPercent: 0.8, scanDepth: 500 },
+        clientAlgorithm: { type: 'strict' },
       }),
       handler: async (job) => {
         processedGroups.push(job.groupId);
-        // 避免 Worker 内部连招 (Chain) 导致测试不准确
-        // 这里的技巧是：每次处理完稍微等一下，让 Strategy 重新介入
-        // 但其实 Worker 内部逻辑倾向于 Chain，
-        // 不过由于我们有两个不同的组，Strict 策略会在每次 acquireJob 时
-        // 强制把 High 组排在 Low 组前面。
-        // 只要 Worker 释放了 Low 组（比如处理完一个），下一次 acquireJob 肯定选 High。
+        // Strict 客户端算法会确保每次 acquireJob 时都按优先级排序
+        // 由于并发为 1，Worker 会按顺序处理高优先级组
       },
     });
 
@@ -61,8 +57,7 @@ describe('PriorityStrategy', () => {
     await worker.close();
 
     // 验证：虽然 Low 先进，但 High 应该先被大批量处理
-    // 注意：如果是 Worker 刚启动时，可能先抓到了 Low 的一个任务（因为 FIFO 已经在 Ready 队列头）
-    // 但随后的任务应该优先处理 High
+    // 在 Strict 模式下，高优先级组应该在大多数情况下被优先处理
 
     // 我们检查最后处理的 3 个任务，必须是 Low (因为 High 早就跑完了)
     const last3 = processedGroups.slice(-3);
@@ -72,29 +67,39 @@ describe('PriorityStrategy', () => {
     expect(allLow).toBe(true);
   });
 
-  it('should support dynamic priority via callback', async () => {
+  it('should support weighted-random client algorithm for load distribution', async () => {
     const queue = new Queue({
       redis,
-      namespace: `${namespace}:dynamic`,
+      namespace: `${namespace}:weighted-random`,
     });
 
-    await queue.add({ groupId: 'group-a', data: { v: 1 } });
-    await queue.add({ groupId: 'group-b', data: { v: 2 } });
+    await queue.groups.setConfig('group-a', { priority: 10 });
+    await queue.groups.setConfig('group-b', { priority: 1 });
 
-    const processed: string[] = [];
+    // 添加不同数量的任务以观察选择顺序
+    // 添加更多 B 任务来测试加权随机是否能将 A 优先处理
+    for (let i = 0; i < 3; i++) {
+      await queue.add({ groupId: 'group-a', data: { v: i } });
+    }
+    for (let i = 0; i < 15; i++) {
+      await queue.add({ groupId: 'group-b', data: { v: i } });
+    }
+
+    const groupSequence: string[] = [];
+    let lastGroup = '';
 
     const worker = new Worker({
       queue,
       concurrency: 1,
       strategy: new PriorityStrategy({
-        algorithm: { type: 'strict' },
-        onGetPriority: (groupId) => {
-          // 动态让 B 优先
-          return groupId === 'group-b' ? 10 : 1;
-        }
+        algorithm: { type: 'probability', topPercent: 0.8, scanDepth: 500 },
+        clientAlgorithm: { type: 'weighted-random', minWeightRatio: 0.1 },
       }),
       handler: async (job) => {
-        processed.push(job.groupId);
+        if (job.groupId !== lastGroup) {
+          groupSequence.push(job.groupId);
+          lastGroup = job.groupId;
+        }
       }
     });
 
@@ -102,10 +107,11 @@ describe('PriorityStrategy', () => {
     await queue.waitForEmpty();
     await worker.close();
 
-    // 期望 B 先于 A (尽管 A 可能先入队)
-    // 注意：如果 A 已经极其靠前，Worker 第一次 fetch 可能会拿到 A。
-    // 这个测试依赖于 Strategy 在 fetch 时的重排序能力。
-    // 如果 A 和 B 都在 Ready 队列，Strategy 会把 B 排前面。
-    expect(processed).toEqual(['group-b', 'group-a']);
+    // 验证：group-a 在组切换序列中应该出现（验证加权随机是否有效选择高优先级组）
+    // 由于 A 优先级是 B 的 10 倍，A 应该至少有机会被选中
+    expect(groupSequence).toContain('group-a');
+
+    // 验证：第一个被选中的组应该是 A（高优先级）而不总是 B
+    expect(groupSequence[0]).toBe('group-a');
   });
 });
