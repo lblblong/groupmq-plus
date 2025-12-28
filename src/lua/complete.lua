@@ -9,6 +9,10 @@ local gid = ARGV[2]
 redis.call("DEL", ns .. ":processing:" .. jobId)
 redis.call("ZREM", ns .. ":processing", jobId)
 
+-- [FIX] Always remove from active list to prevent ghost concurrency
+local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+redis.call("LREM", groupActiveKey, 1, jobId)
+
 -- Check if this job holds the lock
 local lockKey = ns .. ":lock:" .. gid
 local val = redis.call("GET", lockKey)

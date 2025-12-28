@@ -13,9 +13,10 @@ if redis.call("EXISTS", jobKey) == 0 then
   return 0
 end
 
-local groupId = redis.call("HGET", jobKey, "groupId")
-local parentId = redis.call("HGET", jobKey, "parentId")
-local status = redis.call("HGET", jobKey, "status")
+local jobData = redis.call("HMGET", jobKey, "groupId", "parentId", "status")
+local groupId = jobData[1]
+local parentId = jobData[2]
+local status = jobData[3]
 
 -- Remove from delayed and processing structures
 redis.call("ZREM", delayedKey, jobId)
@@ -32,7 +33,11 @@ redis.call("DEL", ns .. ":unique:" .. jobId)
 -- If we have a group, update group zset and ready queue accordingly
 if groupId then
   local gZ = ns .. ":g:" .. groupId
+  local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
   redis.call("ZREM", gZ, jobId)
+  
+  -- [FIX] Remove from active list to prevent ghost concurrency
+  redis.call("LREM", groupActiveKey, 1, jobId)
 
   -- [PHYSICAL SEPARATION] Decrement group job count ONLY if it was in an active state
   local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
@@ -48,13 +53,13 @@ if groupId then
     redis.call("ZREM", limitedKey, groupId)
     -- Clean up empty group
     redis.call("DEL", gZ)
+    redis.call("DEL", groupActiveKey)
     redis.call("DEL", groupMetaKey)
     redis.call("SREM", ns .. ":groups", groupId)
   else
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
       local headScore = tonumber(head[2])
-      local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
       local configKey = ns .. ":config:" .. groupId
       local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
       local currentActive = redis.call("LLEN", groupActiveKey)

@@ -53,6 +53,8 @@ for _, jobId in ipairs(expiredJobs) do
             end
           end
         end
+        -- [FIX] Remove from active list to prevent ghost concurrency
+        redis.call("LREM", ns .. ":g:" .. gid .. ":active", 1, jobId)
         redis.call("DEL", ns .. ":lock:" .. gid)
         redis.call("DEL", procKey)
         redis.call("ZREM", processingKey, jobId)

@@ -149,7 +149,10 @@ if parentId then
       redis.call("ZADD", pGZ, parentScore, parentId)
       redis.call("SADD", ns .. ":groups", parentGroupId)
       
-      -- [LIMITED GROUP SET] Check if should add to ready or limited queue (if head)
+      -- [LIMITED GROUP SET] Update parent group status based on group capacity
+      -- Note: pHead determines the group's priority score for ready/limited queues.
+      -- The parent may not be the queue head (if other tasks have lower scores).
+      -- We use pHead's score regardless, as it represents the earliest task in the group.
       local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
       if pHead and #pHead >= 2 then
          local pHeadScore = tonumber(pHead[2])
