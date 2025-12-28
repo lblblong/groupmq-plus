@@ -1,8 +1,9 @@
--- argv: ns, nowEpochMs, vtMs, maxBatch
+-- argv: ns, nowEpochMs, vtMs, maxBatch, tokenBase
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
 local vt = tonumber(ARGV[2])
 local maxBatch = tonumber(ARGV[3]) or 16
+local tokenBase = ARGV[4] -- [NEW] Unique UUID base for this batch request
 
 local readyKey = ns .. ":ready"
 local processingKey = ns .. ":processing"
@@ -103,6 +104,9 @@ for i = 1, #groups, 2 do
               redis.call("ZADD", readyKey, nextScore, gid)
             end
           else
+            -- Generate unique token for this job using base + index
+            local token = tokenBase .. "-" .. i
+            
             -- Push to group active list
             redis.call("LPUSH", groupActiveKey, jobId)
             
@@ -111,7 +115,10 @@ for i = 1, #groups, 2 do
             
             local procKey = ns .. ":processing:" .. id
             local deadline = now + vt
-            redis.call("HSET", procKey, "groupId", gid, "deadlineAt", tostring(deadline))
+            redis.call("HSET", procKey, 
+              "groupId", gid, 
+              "deadlineAt", tostring(deadline),
+              "token", token)
             redis.call("ZADD", processingKey, deadline, id)
 
             -- Re-add group if there is a new head job (next oldest)
@@ -121,7 +128,7 @@ for i = 1, #groups, 2 do
               redis.call("ZADD", readyKey, nextScore, gid)
             end
 
-            table.insert(out, id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0"))
+            table.insert(out, id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token)
             table.insert(processedGroups, gid)
           end
         end

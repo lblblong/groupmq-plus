@@ -19,6 +19,7 @@ export class Job<T = any> {
   public readonly status: Status | 'unknown'
   public readonly parentId?: string
   public readonly isFlowParent: boolean
+  public readonly token?: string // [NEW] Internal usage for fencing
 
   constructor(args: {
     queue: Queue<T>
@@ -38,6 +39,7 @@ export class Job<T = any> {
     status?: Status | 'unknown'
     parentId?: string
     isFlowParent?: boolean
+    token?: string // [NEW]
   }) {
     this.queue = args.queue
     this.id = args.id
@@ -56,6 +58,7 @@ export class Job<T = any> {
     this.status = args.status ?? 'unknown'
     this.parentId = args.parentId
     this.isFlowParent = args.isFlowParent === true
+    this.token = args.token // [NEW]
   }
 
   async getState(): Promise<
@@ -98,7 +101,10 @@ export class Job<T = any> {
   }
 
   async retry(_state?: Extract<Status, 'completed' | 'failed'>): Promise<void> {
-    await this.queue.retry(this.id)
+    if (!this.token) {
+      throw new Error(`Cannot retry job ${this.id}: token not available`)
+    }
+    await this.queue.retry({ id: this.id, token: this.token })
   }
 
   async updateData(jobData: T): Promise<void> {
@@ -188,6 +194,7 @@ export class Job<T = any> {
       orderMs: reserved.orderMs,
       status: coerceStatus(meta?.status as any),
       isFlowParent: reserved.isFlowParent,
+      token: reserved.token, // [NEW] Pass token from reserved job
     })
   }
 

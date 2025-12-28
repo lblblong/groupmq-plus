@@ -1,6 +1,6 @@
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
---       processedOn, finishedOn, attempts, maxAttempts, now, vt
+--       processedOn, finishedOn, attempts, maxAttempts, now, vt, currentJobToken, nextJobToken
 local ns = KEYS[1]
 local completedJobId = ARGV[1]
 local gid = ARGV[2]
@@ -15,6 +15,8 @@ local attempts = ARGV[10]
 local maxAttempts = ARGV[11]
 local now = tonumber(ARGV[12])
 local vt = tonumber(ARGV[13])
+local currentJobToken = ARGV[14] -- [NEW] Token of the job being completed
+local nextJobToken = ARGV[15]    -- [NEW] Token to assign to the NEXT job
 
 local processingKey = ns .. ":processing"
 local readyKey = ns .. ":ready"
@@ -32,6 +34,15 @@ if jobStatus ~= "processing" or not stillInProcessing then
   return nil
 end
 
+-- [NEW] Token verification
+local procKey = ns .. ":processing:" .. completedJobId
+local storedToken = redis.call("HGET", procKey, "token")
+
+-- If processing key doesn't exist (already deleted) or token doesn't match
+if not storedToken or storedToken ~= currentJobToken then
+  return nil
+end
+
 -- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
 local parentId = redis.call("HGET", jobKey, "parentId")
 -- [PHASE 3 MODIFICATION END]
@@ -39,7 +50,7 @@ local parentId = redis.call("HGET", jobKey, "parentId")
 -- Atomically mark as completed and remove from processing
 -- This prevents stalled checker from racing with us
 redis.call("HSET", jobKey, "status", "completing") -- Temporary status to block stalled checker
-redis.call("DEL", ns .. ":processing:" .. completedJobId)
+redis.call("DEL", procKey)
 redis.call("ZREM", processingKey, completedJobId)
 
 -- Part 3: Record job metadata (completed or failed)
@@ -230,7 +241,10 @@ redis.call("LPUSH", groupActiveKey, id)
 
 local procKey = ns .. ":processing:" .. id
 local deadline = now + vt
-redis.call("HSET", procKey, "groupId", groupId, "deadlineAt", tostring(deadline))
+redis.call("HSET", procKey, 
+  "groupId", groupId, 
+  "deadlineAt", tostring(deadline),
+  "token", nextJobToken)
 
 local processingKey = ns .. ":processing"
 redis.call("ZADD", processingKey, deadline, id)
@@ -251,4 +265,4 @@ elseif currentActive >= limit then
   redis.call("ZADD", limitedKey, score, groupId)
 end
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")
+return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. nextJobToken

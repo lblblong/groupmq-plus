@@ -1,18 +1,32 @@
--- argv: ns, jobId, groupId
+-- argv: ns, jobId, groupId, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
 local groupId = ARGV[2]
+local token = ARGV[3] -- [NEW] Processing token for verification
 local gZ = ns .. ":g:" .. groupId
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
 
 local jobKey = ns .. ":job:" .. jobId
 
+-- [NEW] Token verification: Ensure only the correct worker can dead-letter the job
+local procKey = ns .. ":processing:" .. jobId
+local storedToken = redis.call("HGET", procKey, "token")
+
+-- If job still has a lock (processing) and token doesn't match, reject dead-letter
+if storedToken and storedToken ~= token then
+  return 0 -- Lock mismatch: another worker is processing this job
+end
+-- If no stored token but token was provided, also reject (safety: prevent dead-lettering recovered jobs)
+if not storedToken and token then
+  return 0
+end
+
 -- Remove job from group
 redis.call("ZREM", gZ, jobId)
 
 -- Remove from processing if it's there
-redis.call("DEL", ns .. ":processing:" .. jobId)
+redis.call("DEL", procKey)
 redis.call("ZREM", ns .. ":processing", jobId)
 
 -- No counter operations - use ZCARD for counts

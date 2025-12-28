@@ -448,6 +448,7 @@ export type ReservedJob<T = any> = {
   score: number
   deadlineAt: number
   isFlowParent: boolean
+  token: string // [NEW] Processing token for fencing
 }
 
 function nsKey(ns: string, ...parts: string[]) {
@@ -1115,18 +1116,19 @@ export class Queue<T = any> {
 
   async reserve(): Promise<ReservedJob<T> | null> {
     const now = Date.now()
+    const token = randomUUID() // [NEW] Generate token
 
     const raw = await evalScript<string | null>(
       this.r,
       'reserve',
-      [this.ns, String(now), String(this.vt), String(this.scanLimit)],
+      [this.ns, String(now), String(this.vt), String(this.scanLimit), token], // [NEW] Pass token
       1
     )
 
     if (!raw) return null
 
     const parts = raw.split('|||')
-    if (parts.length !== 11) return null
+    if (parts.length !== 12) return null // [NEW] Changed from 11 to 12
 
     let data: T
     try {
@@ -1153,6 +1155,7 @@ export class Queue<T = any> {
       score: Number(parts[8]),
       deadlineAt: Number.parseInt(parts[9], 10),
       isFlowParent: parts[10] === '1',
+      token: parts[11], // [NEW] Extract token
     } as ReservedJob<T>
 
     return job
@@ -1187,7 +1190,7 @@ export class Queue<T = any> {
    * This is the efficient internal method used by workers.
    */
   public async completeWithMetadata(
-    job: { id: string; groupId: string },
+    job: { id: string; groupId: string; token?: string }, // [NEW] Accept token in job object
     result: unknown,
     meta: {
       processedOn: number
@@ -1196,6 +1199,11 @@ export class Queue<T = any> {
       maxAttempts: number
     }
   ): Promise<void> {
+    if (!job.token) {
+      this.logger.warn(`completeWithMetadata: Missing token for job ${job.id}`)
+      return // [NEW] Safety check
+    }
+
     await evalScript<number>(
       this.r,
       'complete-with-metadata',
@@ -1212,6 +1220,7 @@ export class Queue<T = any> {
         String(meta.finishedOn),
         String(meta.attempts),
         String(meta.maxAttempts),
+        job.token, // [NEW] ARGV[12]
       ],
       1
     )
@@ -1228,6 +1237,7 @@ export class Queue<T = any> {
   async completeAndReserveNextWithMetadata(
     completedJobId: string,
     groupId: string,
+    currentToken: string, // [NEW] Token of job being completed
     handlerResult: unknown,
     meta: {
       processedOn: number
@@ -1237,6 +1247,7 @@ export class Queue<T = any> {
     }
   ): Promise<ReservedJob<T> | null> {
     const now = Date.now()
+    const nextJobToken = randomUUID() // [NEW] Generate token for potentially next job
 
     try {
       const result = await evalScript<string | null>(
@@ -1257,6 +1268,8 @@ export class Queue<T = any> {
           String(meta.maxAttempts),
           String(now),
           String(this.jobTimeoutMs),
+          currentToken, // [NEW] ARGV[14]
+          nextJobToken, // [NEW] ARGV[15]
         ],
         1
       )
@@ -1267,7 +1280,7 @@ export class Queue<T = any> {
 
       // Parse the result (same format as reserve methods)
       const parts = result.split('|||')
-      if (parts.length !== 11) {
+      if (parts.length !== 12) { // [NEW] Changed from 11 to 12
         this.logger.error(
           'Queue completeAndReserveNextWithMetadata: unexpected result format:',
           result
@@ -1287,6 +1300,7 @@ export class Queue<T = any> {
         score,
         deadline,
         isFlowParent,
+        token, // [NEW]
       ] = parts
 
       return {
@@ -1301,6 +1315,7 @@ export class Queue<T = any> {
         score: parseFloat(score),
         deadlineAt: parseInt(deadline, 10),
         isFlowParent: isFlowParent === '1',
+        token, // [NEW]
       }
     } catch (error) {
       this.logger.error(
@@ -1319,11 +1334,16 @@ export class Queue<T = any> {
     return score !== null
   }
 
-  async retry(jobId: string, backoffMs = 0) {
+  async retry(job: { id: string; token?: string }, backoffMs = 0) {
+    if (!job.token) {
+      // Safety check: token should always be present
+      this.logger.warn(`retry called without token for job ${job.id}`)
+      return 0
+    }
     return evalScript<number>(
       this.r,
       'retry',
-      [this.ns, jobId, String(backoffMs)],
+      [this.ns, job.id, String(backoffMs), job.token],
 
       1
     )
@@ -1332,11 +1352,11 @@ export class Queue<T = any> {
   /**
    * Dead letter a job (remove from group and optionally store in dead letter queue)
    */
-  async deadLetter(jobId: string, groupId: string) {
+  async deadLetter(jobId: string, groupId: string, token?: string) {
     return evalScript<number>(
       this.r,
       'dead-letter',
-      [this.ns, jobId, groupId],
+      [this.ns, jobId, groupId, token || ''],
       1
     )
   }
@@ -1427,7 +1447,7 @@ export class Queue<T = any> {
    * Uses consolidated Lua script for atomic operation
    */
   async recordFinalFailure(
-    job: { id: string; groupId: string },
+    job: { id: string; groupId: string; token?: string },
     error: { message?: string; name?: string; stack?: string } | string,
     meta: {
       processedOn?: number
@@ -1465,6 +1485,7 @@ export class Queue<T = any> {
           String(finishedOn),
           String(attempts),
           String(maxAttempts),
+          job.token || '', // [NEW] Pass token for verification
         ],
         1
       )
@@ -1667,11 +1688,12 @@ export class Queue<T = any> {
   async getFailedCount(): Promise<number> {
     return this.r.zcard(`${this.ns}:failed`)
   }
-  async heartbeat(job: { id: string; groupId: string }, extendMs = this.vt) {
+  async heartbeat(job: { id: string; groupId: string; token?: string }, extendMs = this.vt) {
+    if (!job.token) return 0 // [NEW] Safety check
     return evalScript<number>(
       this.r,
       'heartbeat',
-      [this.ns, job.id, job.groupId, String(extendMs)],
+      [this.ns, job.id, job.groupId, String(extendMs), job.token], // [NEW] Pass token
       1
     )
   }
@@ -1899,11 +1921,12 @@ export class Queue<T = any> {
    */
   public async reserveAtomic(groupId: string): Promise<ReserveResult<T>> {
     const now = Date.now()
+    const generatedToken = randomUUID() // [NEW] Generate token
 
     const result = await evalScript<string | null>(
       this.r,
       'reserve-atomic',
-      [this.ns, String(now), String(this.vt), String(groupId)],
+      [this.ns, String(now), String(this.vt), String(groupId), '', generatedToken], // [NEW] Pass token
       1
     )
 
@@ -1919,7 +1942,7 @@ export class Queue<T = any> {
 
     // Parse the delimited string response (same format as regular reserve)
     const parts = result.split('|||')
-    if (parts.length < 11) {
+    if (parts.length < 12) { // [NEW] Changed from 11 to 12
       return { status: 'empty' }
     }
 
@@ -1935,6 +1958,7 @@ export class Queue<T = any> {
       score,
       deadline,
       isFlowParent,
+      token, // [NEW]
     ] = parts
 
     const parsedTimestamp = parseInt(timestamp, 10)
@@ -1952,6 +1976,7 @@ export class Queue<T = any> {
       score: parseFloat(score),
       deadlineAt: parseInt(deadline, 10),
       isFlowParent: isFlowParent === '1',
+      token, // [NEW]
     }
 
     return { status: 'success', job }
@@ -1990,17 +2015,19 @@ export class Queue<T = any> {
    */
   async reserveBatch(maxBatch = 16): Promise<Array<ReservedJob<T>>> {
     const now = Date.now()
+    const tokenBase = randomUUID() // [NEW] Generate unique base for batch tokens
+
     const results = await evalScript<Array<string | null>>(
       this.r,
       'reserve-batch',
-      [this.ns, String(now), String(this.vt), String(Math.max(1, maxBatch))],
+      [this.ns, String(now), String(this.vt), String(Math.max(1, maxBatch)), tokenBase], // [NEW] Pass tokenBase
       1
     )
     const out: Array<ReservedJob<T>> = []
     for (const r of results || []) {
       if (!r) continue
       const parts = r.split('|||')
-      if (parts.length !== 11) continue
+      if (parts.length !== 12) continue // [NEW] Changed from 11 to 12
       out.push({
         id: parts[0],
         groupId: parts[1],
@@ -2013,6 +2040,7 @@ export class Queue<T = any> {
         score: parseFloat(parts[8]),
         deadlineAt: parseInt(parts[9], 10),
         isFlowParent: parts[10] === '1',
+        token: parts[11], // [NEW]
       } as ReservedJob<T>)
     }
     return out

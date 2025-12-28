@@ -1,6 +1,6 @@
 -- Complete a job: unlock group AND record metadata atomically in one call
 -- argv: ns, jobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
---       processedOn, finishedOn, attempts, maxAttempts
+--       processedOn, finishedOn, attempts, maxAttempts, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
 local gid = ARGV[2]
@@ -13,6 +13,7 @@ local processedOn = ARGV[8]
 local finishedOn = ARGV[9]
 local attempts = ARGV[10]
 local maxAttempts = ARGV[11]
+local token = ARGV[12] -- [NEW]
 
 local jobKey = ns .. ":job:" .. jobId
 local processingKey = ns .. ":processing"
@@ -37,10 +38,19 @@ if jobStatus ~= "processing" or not stillInProcessing then
   return 0
 end
 
+-- [NEW] Token verification
+local procKey = ns .. ":processing:" .. jobId
+local storedToken = redis.call("HGET", procKey, "token")
+
+-- If processing key doesn't exist (already deleted) or token doesn't match
+if not storedToken or storedToken ~= token then
+  return 0
+end
+
 -- Atomically mark as completed and remove from processing
 -- This prevents stalled checker from racing with us
 redis.call("HSET", jobKey, "status", "completing") -- Temporary status to block stalled checker
-redis.call("DEL", ns .. ":processing:" .. jobId)
+redis.call("DEL", procKey)
 redis.call("ZREM", processingKey, jobId)
 
 -- Always remove this job from active list to prevent stale entries

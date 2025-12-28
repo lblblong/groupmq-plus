@@ -166,7 +166,7 @@ describe('Parent-Child Flows', () => {
 
     const parentId = 'parent-dl'
 
-    await queue.addFlow({
+    const parentJob = await queue.addFlow({
       parent: { jobId: parentId, groupId: 'p-g', data: { name: 'parent' } },
       children: [
         { jobId: 'child-ok', groupId: 'c-g-ok', data: { fail: false } }, // 不同的组
@@ -192,15 +192,13 @@ describe('Parent-Child Flows', () => {
       },
     })
 
-    // 等待足够时间让失败任务进入 dead-letter
-    await new Promise((r) => setTimeout(r, 3000))
-    await worker.close()
+    await parentJob.waitUntilFinished()
 
     // 验证父任务被触发执行了
     expect(processedJobs).toContain(parentId)
 
     // 验证 flowResults 包含结果
-    const flowResults = await queue.getFlowResults(parentId)
+    const flowResults = await parentJob.getChildrenValues()
     expect(flowResults.find((r) => r.jobId === 'child-ok')?.result).toBe(
       'success'
     )
@@ -208,6 +206,8 @@ describe('Parent-Child Flows', () => {
     expect(
       flowResults.find((r) => r.jobId === 'child-fail')?.result
     ).toBeDefined()
+
+    await worker.close()
   })
 
   it('父子任务均失败', async () => {

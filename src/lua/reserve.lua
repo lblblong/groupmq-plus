@@ -1,8 +1,9 @@
--- argv: ns, nowEpochMs, vtMs, scanLimit
+-- argv: ns, nowEpochMs, vtMs, scanLimit, token
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
 local vt = tonumber(ARGV[2])
 local scanLimit = tonumber(ARGV[3]) or 20
+local token = ARGV[4] -- [NEW]
 
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
@@ -180,7 +181,10 @@ redis.call("ZREMRANGEBYRANK", readyKey, chosenIndex, chosenIndex)
 
 local procKey = ns .. ":processing:" .. id
 local deadline = now + vt
-redis.call("HSET", procKey, "groupId", chosenGid, "deadlineAt", tostring(deadline))
+redis.call("HSET", procKey, 
+  "groupId", chosenGid, 
+  "deadlineAt", tostring(deadline),
+  "token", token)
 
 local processingKey2 = ns .. ":processing"
 redis.call("ZADD", processingKey2, deadline, id)
@@ -193,6 +197,6 @@ if nextHead and #nextHead >= 2 then
 end
 
 local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")
+return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token
 
 

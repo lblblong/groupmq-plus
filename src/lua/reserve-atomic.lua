@@ -1,10 +1,11 @@
 -- Atomic reserve operation that checks lock/limit and reserves in one operation
--- argv: ns, nowEpochMs, vtMs, targetGroupId, allowedJobId (optional)
+-- argv: ns, nowEpochMs, vtMs, targetGroupId, allowedJobId (optional), token
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
 local vt = tonumber(ARGV[2])
 local targetGroupId = ARGV[3]
 local allowedJobId = ARGV[4] -- If provided, allow reserve if matches active job (chaining)
+local token = ARGV[5] -- [NEW] Token passed from TS
 
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
@@ -104,7 +105,10 @@ redis.call("LPUSH", groupActiveKey, id)
 
 local procKey = ns .. ":processing:" .. id
 local deadline = now + vt
-redis.call("HSET", procKey, "groupId", groupId, "deadlineAt", tostring(deadline))
+redis.call("HSET", procKey, 
+  "groupId", groupId, 
+  "deadlineAt", tostring(deadline),
+  "token", token)
 
 local processingKey = ns .. ":processing"
 redis.call("ZADD", processingKey, deadline, id)
@@ -117,4 +121,4 @@ if nextHead and #nextHead >= 2 then
   redis.call("ZADD", readyKey, nextScore, groupId)
 end
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0")
+return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token

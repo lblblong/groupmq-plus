@@ -1,25 +1,45 @@
--- argv: ns, jobId, backoffMs
+-- argv: ns, jobId, backoffMs, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
 local backoffMs = tonumber(ARGV[2]) or 0
+local token = ARGV[3] -- [NEW] Processing token for verification
 
 local jobKey = ns .. ":job:" .. jobId
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
+
+-- [FIX] Token verification: Strict consistency with dead-letter.lua
+local procKey = ns .. ":processing:" .. jobId
+local storedToken = redis.call("HGET", procKey, "token")
+
+-- If job still has a lock (processing) and token doesn't match, reject retry
+if storedToken and storedToken ~= token then
+  return -2 -- LockLost: another worker is processing this job
+end
+-- If no stored token but token was provided, also reject (safety: prevent retry on recovered jobs)
+if not storedToken and token then
+  return -2 -- LockLost: job was recovered/cleared, token is stale
+end
+
 local gid = redis.call("HGET", jobKey, "groupId")
 local attempts = tonumber(redis.call("HINCRBY", jobKey, "attempts", 1))
 local maxAttempts = tonumber(redis.call("HGET", jobKey, "maxAttempts"))
 
-redis.call("DEL", ns .. ":processing:" .. jobId)
+-- [CRITICAL FIX 1]: Check limits BEFORE deleting the lock.
+-- If we return -1, we MUST preserve the lock/token so that recordFinalFailure 
+-- (called next by the worker) can pass its token verification.
+-- [CRITICAL FIX 2]: Use >= instead of >. If attempts reaches max, we stop.
+if attempts >= maxAttempts then
+  return -1
+end
+
+-- Only delete lock if we are actually queuing for retry (releasing to pool)
+redis.call("DEL", procKey)
 redis.call("ZREM", ns .. ":processing", jobId)
 
 -- BullMQ-style: Remove from group active list
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
 redis.call("LREM", groupActiveKey, 1, jobId)
-
-if attempts > maxAttempts then
-  return -1
-end
 
 local score = tonumber(redis.call("HGET", jobKey, "score"))
 local gZ = ns .. ":g:" .. gid

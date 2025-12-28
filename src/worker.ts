@@ -922,6 +922,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       const nextJob = await this.q.completeAndReserveNextWithMetadata(
         job.id,
         job.groupId,
+        job.token, // [NEW] Pass current job token
         handlerResult,
         {
           processedOn: processedOn || Date.now(),
@@ -952,12 +953,16 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       }
     } else {
       // Use completeWithMetadata for atomic completion with metadata
-      await this.q.completeWithMetadata(job, handlerResult, {
-        processedOn: processedOn || Date.now(),
-        finishedOn: finishedOn || Date.now(),
-        attempts: job.attempts,
-        maxAttempts: job.maxAttempts,
-      })
+      await this.q.completeWithMetadata(
+        { id: job.id, groupId: job.groupId, token: job.token }, // [NEW] Pass token inside object
+        handlerResult,
+        {
+          processedOn: processedOn || Date.now(),
+          finishedOn: finishedOn || Date.now(),
+          attempts: job.attempts,
+          maxAttempts: job.maxAttempts,
+        }
+      )
     }
 
     return undefined
@@ -1230,7 +1235,11 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
       hbTimer = setInterval(async () => {
         try {
-          const result = await this.q.heartbeat(job)
+          const result = await this.q.heartbeat({
+            id: job.id,
+            groupId: job.groupId,
+            token: job.token // [NEW] Pass token
+          })
           if (result === 0) {
             // Job no longer exists or is not in processing state
             this.logger.warn(
@@ -1414,7 +1423,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     }
 
     // Retry the job
-    const retryResult = await this.q.retry(job.id, backoffMs)
+    const retryResult = await this.q.retry({ id: job.id, token: job.token }, backoffMs)
     if (retryResult === -1) {
       // Queue-level max attempts exceeded
       await this.deadLetterJob(
@@ -1423,6 +1432,13 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
         jobStartWallTime,
         failedAt,
         job.maxAttempts
+      )
+      return
+    }
+    if (retryResult === -2) {
+      // [NEW] Lock lost: another worker took over the job, abort retry
+      this.logger.warn(
+        `Lock lost for job ${job.id}: cannot retry as another worker has taken over`
       )
       return
     }
@@ -1455,7 +1471,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
     try {
       await this.q.recordFinalFailure(
-        { id: job.id, groupId: job.groupId },
+        { id: job.id, groupId: job.groupId, token: job.token },
         { name: errObj.name, message: errObj.message, stack: errObj.stack },
         {
           processedOn,
@@ -1469,7 +1485,8 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       this.logger.warn('Failed to record final failure', e)
     }
 
-    await this.q.deadLetter(job.id, job.groupId)
+    // [NEW] Pass token to deadLetter for verification
+    await this.q.deadLetter(job.id, job.groupId, job.token)
   }
 
   /**

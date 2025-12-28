@@ -1,6 +1,6 @@
 -- Record job completion or failure with retention management
 -- argv: ns, jobId, status ('completed' | 'failed'), timestamp, result/error (JSON), 
---       keepCompleted, keepFailed, processedOn, finishedOn, attempts, maxAttempts
+--       keepCompleted, keepFailed, processedOn, finishedOn, attempts, maxAttempts, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
 local status = ARGV[2]
@@ -12,8 +12,17 @@ local processedOn = ARGV[7]
 local finishedOn = ARGV[8]
 local attempts = ARGV[9]
 local maxAttempts = ARGV[10]
+local token = ARGV[11] -- [NEW] Processing token for verification
 
 local jobKey = ns .. ":job:" .. jobId
+
+-- [NEW] Token verification: Ensure only the correct worker can record final failure
+local procKey = ns .. ":processing:" .. jobId
+local storedToken = redis.call("HGET", procKey, "token")
+if token and (not storedToken or storedToken ~= token) then
+  -- Token mismatch: This worker has lost the lock, reject the operation
+  return 0
+end
 
 -- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
 local parentId = redis.call("HGET", jobKey, "parentId")
