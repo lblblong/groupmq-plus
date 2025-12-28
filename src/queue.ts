@@ -3,7 +3,7 @@ import CronParser from 'cron-parser'
 import type Redis from 'ioredis'
 import { type Job, Job as JobEntity } from './job'
 import { Logger, type LoggerInterface } from './logger'
-import { evalScript } from './lua/loader'
+import { evalScript } from './functions/loader'
 import type { Status } from './status'
 
 /**

@@ -82,7 +82,7 @@ describe('Corrupted/Missing Job Hash Tests', () => {
 
     try {
       // Should handle gracefully
-      const result = await queue['reserveAtomic'](groupId);
+      const result = await queue.reserveAtomic(groupId);
       // Should return empty status
       expect(result.status).toBe('empty');
     } catch (error: any) {
@@ -95,7 +95,7 @@ describe('Corrupted/Missing Job Hash Tests', () => {
 
     // Verify queue still works
     await queue.add({ groupId, data: { test: 'valid' } });
-    const result = await queue['reserveAtomic'](groupId);
+    const result = await queue.reserveAtomic(groupId);
     expect(result.status).toBe('success');
     if (result.status === 'success') {
       expect(result.job.groupId).toBe(groupId);
