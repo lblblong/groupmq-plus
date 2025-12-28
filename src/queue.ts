@@ -2459,15 +2459,15 @@ export class Queue<T = any> {
       ])
 
       const limit = parseInt(concurrencyStr || '1', 10)
-      const headScore = await this.r.zscore(gZ,
-        (await this.r.zrange(gZ, 0, 0))[0] || ''
-      )
+      const headRes = await this.r.zrange(gZ, 0, 0, 'WITHSCORES')
+      const headScore = headRes.length >= 2 ? parseFloat(headRes[1]) : null
 
       if (jobCount === 0) {
-        // Empty group: remove from both ready and limited
+        // Empty gZ: remove from both ready and limited (they only track waiting jobs)
         if (await this.r.zrem(readyKey, gid)) fixed++
         if (await this.r.zrem(limitedKey, gid)) fixed++
       } else if (activeCount >= limit && headScore !== null) {
+
         // At capacity: should be in limited, not ready
         const isInReady = await this.r.zscore(readyKey, gid)
         const isInLimited = await this.r.zscore(limitedKey, gid)

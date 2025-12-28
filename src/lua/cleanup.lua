@@ -18,24 +18,48 @@ for _, jobId in ipairs(expiredJobs) do
     local gid = procData[1]
     local deadlineAt = tonumber(procData[2])
     if gid and deadlineAt and now > deadlineAt then
-      local jobKey = ns .. ":job:" .. jobId
-      local jobScore = redis.call("HGET", jobKey, "score")
+      local jobData = redis.call("HMGET", jobKey, "score", "delayUntil")
+      local jobScore = tonumber(jobData[1])
+      local delayUntil = tonumber(jobData[2]) or 0
+      
       if jobScore then
         local gZ = ns .. ":g:" .. gid
-        redis.call("ZADD", gZ, tonumber(jobScore), jobId)
-        local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-        if head and #head >= 2 then
-          local headScore = tonumber(head[2])
-          redis.call("ZADD", readyKey, headScore, gid)
+        if delayUntil > now then
+          -- Recover to delayed state
+          redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
+          redis.call("HSET", jobKey, "status", "delayed")
+          -- [PHYSICAL SEPARATION] Ensure it's NOT in gZ
+          redis.call("ZREM", gZ, jobId)
+        else
+          -- Recover to waiting state
+          redis.call("ZADD", gZ, jobScore, jobId)
+          redis.call("HSET", jobKey, "status", "waiting")
+          
+          local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+          if head and #head >= 2 then
+            local headScore = tonumber(head[2])
+            -- [LIMITED GROUP SET] Check group capacity after recovery
+            local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+            local configKey = ns .. ":config:" .. gid
+            local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+            local currentActive = redis.call("LLEN", groupActiveKey)
+            
+            if currentActive >= limit then
+              redis.call("ZREM", readyKey, gid)
+              redis.call("ZADD", ns .. ":limited", headScore, gid)
+            else
+              redis.call("ZREM", ns .. ":limited", gid)
+              redis.call("ZADD", readyKey, headScore, gid)
+            end
+          end
         end
         redis.call("DEL", ns .. ":lock:" .. gid)
         redis.call("DEL", procKey)
         redis.call("ZREM", processingKey, jobId)
         
-        -- No counter operations - use ZCARD for counts
-        
         cleaned = cleaned + 1
       end
+
     end
   end
   -- If not still in processing, it was completed - don't re-add it!

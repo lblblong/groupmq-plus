@@ -66,18 +66,31 @@ else
   redis.call("LREM", groupActiveKey, 1, jobId)
 end
 
+-- [PHYSICAL SEPARATION] Decrement group job count
+local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
+local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+
 -- Check if there are more jobs in this group
 local gZ = ns .. ":g:" .. gid
 local jobCount = redis.call("ZCARD", gZ)
 if jobCount == 0 then
-  -- Remove empty group
-  redis.call("DEL", gZ)
-  redis.call("DEL", groupActiveKey)
-  redis.call("SREM", ns .. ":groups", gid)
-  redis.call("ZREM", ns .. ":ready", gid)
-  redis.call("DEL", ns .. ":buffer:" .. gid)
-  redis.call("ZREM", ns .. ":buffering", gid)
+  -- Clean up empty group ONLY if no jobs left in any state
+  if remainingJobs <= 0 then
+    redis.call("DEL", gZ)
+    redis.call("DEL", groupActiveKey)
+    redis.call("DEL", groupMetaKey)
+    redis.call("SREM", ns .. ":groups", gid)
+    redis.call("ZREM", ns .. ":ready", gid)
+    redis.call("ZREM", limitedKey, gid)
+    redis.call("DEL", ns .. ":buffer:" .. gid)
+    redis.call("ZREM", ns .. ":buffering", gid)
+  else
+    -- Group still has delayed/staged jobs, just remove from ready/limited
+    redis.call("ZREM", readyKey, gid)
+    redis.call("ZREM", limitedKey, gid)
+  end
 else
+
   -- Group has more jobs, update ready/limited status based on activeCount
   local groupBufferKey = ns .. ":buffer:" .. gid
   local isBuffering = redis.call("EXISTS", groupBufferKey)

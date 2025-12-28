@@ -27,40 +27,61 @@ end
 
 local gZ = ns .. ":g:" .. groupId
 
--- Check if job is still in group (not deleted)
-local jobInGroup = redis.call("ZSCORE", gZ, jobId)
-if not jobInGroup then
+-- Check if job is currently in delayed set
+local inDelayed = redis.call("ZSCORE", delayedKey, jobId)
+-- Check if job is currently in group ZSET
+local inGroup = redis.call("ZSCORE", gZ, jobId)
+
+-- If it's not in either, it might be processing or completed/failed
+-- We only allow changing delay for waiting or delayed jobs
+if not inDelayed and not inGroup then
   return 0
 end
 
 -- Update job's delayUntil field
 redis.call("HSET", jobKey, "delayUntil", tostring(newDelayUntil))
 
--- Check if job is currently in delayed set
-local inDelayed = redis.call("ZSCORE", delayedKey, jobId)
 
 if newDelayUntil > 0 and newDelayUntil > now then
-  -- Job should be delayed
+  -- Job should be delayed: add to delayed set and REMOVE from group ZSET
   redis.call("HSET", jobKey, "status", "delayed")
   redis.call("ZADD", delayedKey, newDelayUntil, jobId)
-  -- If this is the head job and wasn't already delayed, remove group from ready
-  if not inDelayed then
-    local head = redis.call("ZRANGE", gZ, 0, 0)
-    if head and #head > 0 and head[1] == jobId then
-      redis.call("ZREM", readyKey, groupId)
+  redis.call("ZREM", gZ, jobId)
+  
+  -- Update group status in ready/limited
+  local jobCount = redis.call("ZCARD", gZ)
+  if jobCount == 0 then
+    redis.call("ZREM", readyKey, groupId)
+    redis.call("ZREM", limitedKey, groupId)
+  else
+    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+    if head and #head >= 2 then
+      local headScore = tonumber(head[2])
+      if redis.call("ZSCORE", readyKey, groupId) then
+        redis.call("ZADD", readyKey, headScore, groupId)
+      elseif redis.call("ZSCORE", limitedKey, groupId) then
+        redis.call("ZADD", limitedKey, headScore, groupId)
+      end
     end
   end
 else
-  -- Job should be ready immediately
+  -- Job should be ready immediately: remove from delayed and ADD to group ZSET
   redis.call("HSET", jobKey, "status", "waiting")
   if inDelayed then
-    -- Remove from delayed
     redis.call("ZREM", delayedKey, jobId)
   end
-  -- [LIMITED GROUP SET] If this is the head job, check group capacity
+  
+  local score = tonumber(redis.call("HGET", jobKey, "score"))
+  if score then
+    redis.call("ZADD", gZ, score, jobId)
+  end
+  
+  -- [LIMITED GROUP SET] Check group capacity and update ready/limited
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if head and #head >= 2 and head[1] == jobId then
+  if head and #head >= 2 then
+    local headJobId = head[1]
     local headScore = tonumber(head[2])
+    
     local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
     local configKey = ns .. ":config:" .. groupId
     local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1

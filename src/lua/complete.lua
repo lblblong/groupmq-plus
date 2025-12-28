@@ -15,19 +15,28 @@ local val = redis.call("GET", lockKey)
 if val == jobId then
   redis.call("DEL", lockKey)
   
+  -- [PHYSICAL SEPARATION] Decrement group job count
+  local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
+  local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+
   -- Check if there are more jobs in this group
   local gZ = ns .. ":g:" .. gid
   local jobCount = redis.call("ZCARD", gZ)
   if jobCount == 0 then
-    -- Remove empty group zset and from groups tracking set
-    redis.call("DEL", gZ)
-    redis.call("SREM", ns .. ":groups", gid)
-    -- Remove from ready queue
-    redis.call("ZREM", ns .. ":ready", gid)
-    -- Clean up any buffering state (shouldn't exist but be safe)
-    redis.call("DEL", ns .. ":buffer:" .. gid)
-    redis.call("ZREM", ns .. ":buffering", gid)
+    -- Clean up empty group ONLY if no jobs left in any state
+    if remainingJobs <= 0 then
+      redis.call("DEL", gZ)
+      redis.call("DEL", groupMetaKey)
+      redis.call("SREM", ns .. ":groups", gid)
+      redis.call("ZREM", ns .. ":ready", gid)
+      redis.call("DEL", ns .. ":buffer:" .. gid)
+      redis.call("ZREM", ns .. ":buffering", gid)
+    else
+      -- Group still has delayed/staged jobs, just remove from ready
+      redis.call("ZREM", ns .. ":ready", gid)
+    end
   else
+
     -- Group has more jobs, re-add to ready set
     -- Note: If the group was buffering, it will be handled by the buffering logic
     -- If it's not buffering, add to ready immediately

@@ -37,12 +37,22 @@ for i = 1, #ids do
   if groupId then
     local gZ = ns .. ':g:' .. groupId
     redis.call('ZREM', gZ, id)
-    local jobCount = redis.call('ZCARD', gZ)
-    if jobCount == 0 then
+    
+    -- [PHYSICAL SEPARATION] Decrement group job count ONLY if it was in an active state (delayed)
+    local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
+    local remainingJobs = tonumber(redis.call("HGET", groupMetaKey, "count")) or 0
+    
+    if status == "delayed" then
+      remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+    end
+
+    if remainingJobs <= 0 then
+
       redis.call('ZREM', readyKey, groupId)
       redis.call('ZREM', limitedKey, groupId)
       -- Clean up empty group
       redis.call('DEL', gZ)
+      redis.call('DEL', groupMetaKey)
       redis.call('SREM', ns .. ':groups', groupId)
     elseif status == 'delayed' then
       -- Only update ready/limited queue score for delayed jobs

@@ -187,8 +187,11 @@ redis.call("PUBLISH", ns .. ":events", eventPayload)
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
 local activeJobId = redis.call("LINDEX", groupActiveKey, 0)
 
+-- [PHYSICAL SEPARATION] Decrement group job count
+local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
+local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+
 -- Always clean up this job from active list, even if not at head
--- This prevents stale active lists from race conditions
 if activeJobId == completedJobId then
   -- Normal case: this job is at the head of active list
   redis.call("LPOP", groupActiveKey)
@@ -205,11 +208,15 @@ end
 local gZ = ns .. ":g:" .. gid
 local zpop = redis.call("ZPOPMIN", gZ, 1)
 if not zpop or #zpop == 0 then
-  -- Clean up empty group
-  local jobCount = redis.call("ZCARD", gZ)
-  if jobCount == 0 then
+  -- Clean up empty group ONLY if no jobs left in any state
+  if remainingJobs <= 0 then
     redis.call("DEL", gZ)
+    redis.call("DEL", groupMetaKey)
     redis.call("SREM", ns .. ":groups", gid)
+    redis.call("ZREM", readyKey, gid)
+    redis.call("ZREM", limitedKey, gid)
+  else
+    -- Group still has delayed/staged jobs, just remove from ready/limited
     redis.call("ZREM", readyKey, gid)
     redis.call("ZREM", limitedKey, gid)
   end
@@ -257,12 +264,21 @@ local configKey = ns .. ":config:" .. gid
 local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
 local currentActive = redis.call("LLEN", groupActiveKey)
 
-if currentActive < limit then
-  redis.call("ZREM", limitedKey, groupId)
-  redis.call("ZADD", readyKey, score, groupId)
-elseif currentActive >= limit then
+-- Get the score of the NEW head of gZ
+local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+if nextHead and #nextHead >= 2 then
+  local nextHeadScore = tonumber(nextHead[2])
+  if currentActive < limit then
+    redis.call("ZREM", limitedKey, groupId)
+    redis.call("ZADD", readyKey, nextHeadScore, groupId)
+  else
+    redis.call("ZREM", readyKey, groupId)
+    redis.call("ZADD", limitedKey, nextHeadScore, groupId)
+  end
+else
+  -- No more jobs in gZ
   redis.call("ZREM", readyKey, groupId)
-  redis.call("ZADD", limitedKey, score, groupId)
+  redis.call("ZREM", limitedKey, groupId)
 end
 
 return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. nextJobToken

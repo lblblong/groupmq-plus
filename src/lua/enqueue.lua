@@ -129,13 +129,13 @@ redis.call("HMSET", jobKey,
 
 -- Track group membership (idempotent)
 redis.call("SADD", groupsKey, groupId)
+redis.call("HINCRBY", ns .. ":g:" .. groupId .. ":meta", "count", 1)
 
 -- Determine job status and placement
 local jobStatus = "waiting"
 
 if delayUntil > 0 and delayUntil > now then
-  -- Job is delayed, add to delayed set and group set
-  redis.call("ZADD", gZ, score, jobId)
+  -- Job is delayed, add to delayed set ONLY (physical separation)
   redis.call("ZADD", delayedKey, delayUntil, jobId)
   jobStatus = "delayed"
   redis.call("HSET", jobKey, "status", jobStatus)

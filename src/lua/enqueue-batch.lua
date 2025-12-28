@@ -64,27 +64,27 @@ for i, job in ipairs(jobs) do
     
     -- Add to groups set
     redis.call("SADD", groupsKey, groupId)
+    redis.call("HINCRBY", ns .. ":g:" .. groupId .. ":meta", "count", 1)
     
-    -- Add to group sorted set
     local gZ = ns .. ":g:" .. groupId
-    redis.call("ZADD", gZ, score, jobId)
     
     -- Determine job placement
     local jobStatus = "waiting"
     
     if delayUntil > 0 and delayUntil > now then
-      -- Delayed job
+      -- Delayed job: add to delayed set ONLY
       redis.call("ZADD", delayedKey, delayUntil, jobId)
       jobStatus = "delayed"
       redis.call("HSET", jobKey, "status", jobStatus)
     elseif orderMs and orderingDelayMs > 0 then
-      -- Staged job (ordering)
+      -- Staged job (ordering): add to stage set ONLY
       local releaseAt = orderMs + orderingDelayMs
       redis.call("ZADD", stageKey, releaseAt, jobId)
       jobStatus = "staged"
       redis.call("HSET", jobKey, "status", jobStatus)
     else
-      -- Ready to process
+      -- Ready to process: add to group ZSET
+      redis.call("ZADD", gZ, score, jobId)
       jobStatus = "waiting"
       redis.call("HSET", jobKey, "status", jobStatus)
       -- Mark group for ready queue update (batch later)

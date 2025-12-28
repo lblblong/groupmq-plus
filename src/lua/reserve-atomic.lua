@@ -69,12 +69,6 @@ end
 local headJobId = head[1]
 local jobKey = ns .. ":job:" .. headJobId
 
--- Skip if head job is delayed
-local jobStatus = redis.call("HGET", jobKey, "status")
-if jobStatus == "delayed" then
-  return nil
-end
-
 -- Pop the job
 local zpop = redis.call("ZPOPMIN", gZ, 1)
 if not zpop or #zpop == 0 then
@@ -115,10 +109,23 @@ redis.call("ZADD", processingKey, deadline, id)
 
 redis.call("HSET", jobKey, "status", "processing")
 
+-- [LIMITED GROUP SET] Update ready/limited status
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextScore = tonumber(nextHead[2])
-  redis.call("ZADD", readyKey, nextScore, groupId)
+  local newActiveCount = activeCount + 1
+  if newActiveCount < limit then
+    redis.call("ZREM", limitedKey, targetGroupId)
+    redis.call("ZADD", readyKey, nextScore, targetGroupId)
+  else
+    redis.call("ZREM", readyKey, targetGroupId)
+    redis.call("ZADD", limitedKey, nextScore, targetGroupId)
+  end
+else
+  -- No more jobs in gZ
+  redis.call("ZREM", readyKey, targetGroupId)
+  redis.call("ZREM", limitedKey, targetGroupId)
 end
+
 
 return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token

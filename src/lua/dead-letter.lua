@@ -24,6 +24,11 @@ end
 
 -- Remove job from group
 redis.call("ZREM", gZ, jobId)
+redis.call("ZREM", ns .. ":delayed", jobId)
+
+-- [PHYSICAL SEPARATION] Decrement group job count
+local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
+local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
 
 -- Remove from processing if it's there
 redis.call("DEL", procKey)
@@ -39,12 +44,12 @@ local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
 redis.call("LREM", groupActiveKey, 1, jobId)
 
 -- Check if group is now empty or should be removed from ready queue
-local jobCount = redis.call("ZCARD", gZ)
-if jobCount == 0 then
+if remainingJobs <= 0 then
   -- Group is empty, remove from ready and limited queues and clean up
   redis.call("ZREM", readyKey, groupId)
   redis.call("ZREM", limitedKey, groupId)
   redis.call("DEL", gZ)
+  redis.call("DEL", groupMetaKey)
   redis.call("DEL", groupActiveKey)
   redis.call("SREM", ns .. ":groups", groupId)
 else

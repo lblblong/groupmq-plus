@@ -22,12 +22,20 @@ for i = 1, #readyJobs do
     -- Remove from delayed set
     redis.call("ZREM", delayedKey, jobId)
     
-    -- Check if this job is the head of its group (earliest in group)
-    local head = redis.call("ZRANGE", gZ, 0, 0)
-    if head and #head > 0 and head[1] == jobId then
-      -- This is the head job, so group should be in ready or limited
-      local headScore = redis.call("ZSCORE", gZ, jobId)
-      if headScore then
+    -- [PHYSICAL SEPARATION] Add back to group ZSET with original score
+    local score = tonumber(redis.call("HGET", jobKey, "score"))
+    if score then
+      redis.call("ZADD", gZ, score, jobId)
+      redis.call("SADD", ns .. ":groups", groupId)
+      redis.call("HSET", jobKey, "status", "waiting")
+      redis.call("HDEL", jobKey, "delayUntil", "runAt")
+      
+      -- Check if this job is now the head of its group (earliest in group)
+      local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+      if head and #head >= 2 then
+        local headJobId = head[1]
+        local headScore = tonumber(head[2])
+        
         local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
         local configKey = ns .. ":config:" .. groupId
         local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1

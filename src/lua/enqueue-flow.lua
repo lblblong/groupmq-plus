@@ -67,6 +67,8 @@ redis.call("HMSET", parentKey,
   "flowRemaining", tostring(childrenCount),
   "isFlowParent", "1"
 )
+redis.call("SADD", ns .. ":groups", parentGroupId)
+redis.call("HINCRBY", ns .. ":g:" .. parentGroupId .. ":meta", "count", 1)
 
 -- 2. Setup Children Jobs
 local results = {}
@@ -124,6 +126,8 @@ for i = 0, childrenCount - 1 do
   )
   
   redis.call("SET", ns .. ":unique:" .. childId, childId)
+  redis.call("SADD", ns .. ":groups", childGroupId)
+  redis.call("HINCRBY", ns .. ":g:" .. childGroupId .. ":meta", "count", 1)
   
   -- Record child relationship for introspection
   -- Key: {ns}:flow:children:{parentId}

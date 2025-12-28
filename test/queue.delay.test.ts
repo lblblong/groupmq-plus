@@ -244,7 +244,10 @@ describe('Delay Jobs Tests', () => {
     await worker.close();
 
     expect(processed).toHaveLength(2);
-    // Even though job2 had shorter delay, job1 should be processed first due to orderMs
-    expect(processed).toEqual(['job1', 'job2']);
+    // With physical separation, job2 becomes ready at T+300ms and is processed immediately,
+    // while job1 is still delayed until T+500ms. This avoids Head-of-Line blocking.
+    // If they were promoted in the same tick, job1 would go first due to orderMs.
+    expect(processed).toEqual(['job2', 'job1']);
   });
 });
+

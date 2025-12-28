@@ -32,6 +32,7 @@ for i = 1, #readyJobs do
     
     -- Add to group ZSET with original score
     redis.call("ZADD", gZ, tonumber(score), jobId)
+    redis.call("SADD", ns .. ":groups", groupId)
     
     -- Update job status from "staged" to "waiting"
     redis.call("HSET", jobKey, "status", "waiting")

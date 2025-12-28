@@ -41,27 +41,51 @@ if (not groups or #groups == 0) or shouldCheckStalled then
     local deadlineAt = tonumber(procData[2])
     if gid and deadlineAt and now > deadlineAt then
       local jobKey = ns .. ":job:" .. jobId
-      local jobScore = redis.call("HGET", jobKey, "score")
+      local jobData = redis.call("HMGET", jobKey, "score", "delayUntil")
+      local jobScore = tonumber(jobData[1])
+      local delayUntil = tonumber(jobData[2] or "0")
+      
       if jobScore then
         local gZ = ns .. ":g:" .. gid
-        redis.call("ZADD", gZ, tonumber(jobScore), jobId)
-        local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-        if head and #head >= 2 then
-          local headScore = tonumber(head[2])
-          -- [LIMITED GROUP SET] Check group capacity after stalled recovery
-          local groupActiveKey = ns .. ":g:" .. gid .. ":active"
-          local configKey = ns .. ":config:" .. gid
-          local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-          local currentActive = redis.call("LLEN", groupActiveKey)
+        
+        if delayUntil > 0 and delayUntil > now then
+          -- [PHYSICAL SEPARATION] Job is still delayed, add to delayed set ONLY
+          redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
+          redis.call("HSET", jobKey, "status", "delayed")
           
-          if currentActive >= limit then
-            -- Group is still full, add to limited instead of ready
-            redis.call("ZREM", readyKey, gid)
-            redis.call("ZADD", limitedKey, headScore, gid)
-          else
-            -- Group has capacity, add to ready
-            redis.call("ZREM", limitedKey, gid)
-            redis.call("ZADD", readyKey, headScore, gid)
+          -- Update group status in ready/limited (it might have been the head)
+          local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+          if head and #head >= 2 then
+            local headScore = tonumber(head[2])
+            if redis.call("ZSCORE", readyKey, gid) then
+              redis.call("ZADD", readyKey, headScore, gid)
+            elseif redis.call("ZSCORE", limitedKey, gid) then
+              redis.call("ZADD", limitedKey, headScore, gid)
+            end
+          end
+        else
+          -- Recover to waiting state
+          redis.call("ZADD", gZ, jobScore, jobId)
+          redis.call("HSET", jobKey, "status", "waiting")
+          
+          local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+          if head and #head >= 2 then
+            local headScore = tonumber(head[2])
+            -- [LIMITED GROUP SET] Check group capacity after stalled recovery
+            local groupActiveKey = ns .. ":g:" .. gid .. ":active"
+            local configKey = ns .. ":config:" .. gid
+            local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+            local currentActive = redis.call("LLEN", groupActiveKey)
+            
+            if currentActive >= limit then
+              -- Group is still full, add to limited instead of ready
+              redis.call("ZREM", readyKey, gid)
+              redis.call("ZADD", limitedKey, headScore, gid)
+            else
+              -- Group has capacity, add to ready
+              redis.call("ZREM", limitedKey, gid)
+              redis.call("ZADD", readyKey, headScore, gid)
+            end
           end
         end
         redis.call("DEL", ns .. ":lock:" .. gid)
@@ -114,13 +138,10 @@ for i = 1, #groups, 2 do
       local candidateJobId = head[1]
       local headJobKey = ns .. ":job:" .. candidateJobId
       
-      -- Skip if head job is delayed (will be promoted later)
-      local jobStatus = redis.call("HGET", headJobKey, "status")
-      if jobStatus ~= "delayed" then
-        -- Pop the job and push to active list atomically
-        local zpop = redis.call("ZPOPMIN", gZ, 1)
-        if zpop and #zpop > 0 then
-          headJobId = zpop[1]
+      -- Pop the job and push to active list atomically
+      local zpop = redis.call("ZPOPMIN", gZ, 1)
+      if zpop and #zpop > 0 then
+        headJobId = zpop[1]
           -- Read the popped job (use headJobId to avoid races)
           headJobKey = ns .. ":job:" .. headJobId
           job = redis.call("HMGET", headJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
@@ -135,9 +156,10 @@ for i = 1, #groups, 2 do
           break
         end
       end
-    end
   else
     -- Group is full, move to limited if it has waiting tasks
+
+
     -- [LIMITED GROUP SET]
     local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if head and #head >= 2 then
@@ -189,12 +211,23 @@ redis.call("HSET", procKey,
 local processingKey2 = ns .. ":processing"
 redis.call("ZADD", processingKey2, deadline, id)
 
+-- [LIMITED GROUP SET] Update ready/limited status
+local groupActiveKey = ns .. ":g:" .. chosenGid .. ":active"
+local configKey = ns .. ":config:" .. chosenGid
+local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
+local currentActive = redis.call("LLEN", groupActiveKey)
+
 local gZ = ns .. ":g:" .. chosenGid
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextScore = tonumber(nextHead[2])
-  redis.call("ZADD", readyKey, nextScore, chosenGid)
+  if currentActive < limit then
+    redis.call("ZADD", readyKey, nextScore, chosenGid)
+  else
+    redis.call("ZADD", limitedKey, nextScore, chosenGid)
+  end
 end
+
 
 local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
 return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token

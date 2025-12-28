@@ -29,13 +29,20 @@ end
 
 -- Mark job as waiting (no longer delayed)
 redis.call("HSET", jobKey, "status", "waiting")
-redis.call("HDEL", jobKey, "runAt")
+redis.call("HDEL", jobKey, "runAt", "delayUntil")
 
 local gZ = ns .. ":g:" .. groupId
-local head = redis.call("ZRANGE", gZ, 0, 0)
-if head and #head > 0 and head[1] == jobId then
-  local headScore = redis.call("ZSCORE", gZ, jobId)
-  if headScore then
+local score = tonumber(redis.call("HGET", jobKey, "score"))
+if score then
+  -- [PHYSICAL SEPARATION] Add back to group ZSET
+  redis.call("ZADD", gZ, score, jobId)
+  redis.call("SADD", ns .. ":groups", groupId)
+  
+  local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
+  if head and #head >= 2 then
+    local headJobId = head[1]
+    local headScore = tonumber(head[2])
+    
     local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
     local configKey = ns .. ":config:" .. groupId
     local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
