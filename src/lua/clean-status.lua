@@ -70,7 +70,52 @@ for i = 1, #ids do
 
   -- 2. If this job is a child, remove it from parent's children set
   if parentId then
-    redis.call('SREM', ns .. ':flow:children:' .. parentId, id)
+    local parentKey = ns .. ':job:' .. parentId
+    local parentChildrenKey = ns .. ':flow:children:' .. parentId
+
+    local removedFromSet = redis.call('SREM', parentChildrenKey, id)
+    if removedFromSet == 1 then
+      -- Also remove any recorded child result on parent (avoid stale childrenValues entries)
+      redis.call('HDEL', ns .. ':flow:results:' .. parentId, id)
+
+      local remaining = redis.call('HINCRBY', parentKey, 'flowRemaining', -1)
+
+      if remaining <= 0 then
+        local parentStatus = redis.call('HGET', parentKey, 'status')
+        if parentStatus == 'waiting-children' then
+          redis.call('HSET', parentKey, 'status', 'waiting')
+
+          local parentGroupId = redis.call('HGET', parentKey, 'groupId')
+          if parentGroupId then
+            local parentScore = tonumber(redis.call('HGET', parentKey, 'score'))
+            if not parentScore then
+              parentScore = tonumber(redis.call('TIME')[1]) * 1000
+            end
+
+            local pGZ = ns .. ':g:' .. parentGroupId
+            redis.call('ZADD', pGZ, parentScore, parentId)
+            redis.call('SADD', ns .. ':groups', parentGroupId)
+
+            local pHead = redis.call('ZRANGE', pGZ, 0, 0, 'WITHSCORES')
+            if pHead and #pHead >= 2 then
+              local pHeadScore = tonumber(pHead[2])
+              local pGroupActiveKey = ns .. ':g:' .. parentGroupId .. ':active'
+              local pConfigKey = ns .. ':config:' .. parentGroupId
+              local pLimit = tonumber(redis.call('HGET', pConfigKey, 'concurrency')) or 1
+              local pCurrentActive = redis.call('LLEN', pGroupActiveKey)
+
+              if pCurrentActive >= pLimit then
+                redis.call('ZREM', readyKey, parentGroupId)
+                redis.call('ZADD', limitedKey, pHeadScore, parentGroupId)
+              else
+                redis.call('ZREM', limitedKey, parentGroupId)
+                redis.call('ZADD', readyKey, pHeadScore, parentGroupId)
+              end
+            end
+          end
+        end
+      end
+    end
   end
 
   removed = removed + 1
