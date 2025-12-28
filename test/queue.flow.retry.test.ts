@@ -33,17 +33,20 @@ describe('Parent-Child Flows', () => {
           jobId: 'parent-job',
           groupId: 'g-parent',
           data: { name: 'parent' },
+          groupConfig: { priority: 10000 }
         },
         children: [
           {
             jobId: 'child-job-1',
             groupId: 'g-child-1',
             data: { name: 'child1' },
+            groupConfig: { priority: 10 }
           },
           {
             jobId: 'child-job-2',
             groupId: 'g-child-2',
             data: { name: 'child2' },
+            groupConfig: { priority: 10 }
           },
         ],
       })
@@ -51,16 +54,7 @@ describe('Parent-Child Flows', () => {
       const worker = new Worker({
         queue,
         concurrency: 1,
-        strategy: new PriorityStrategy({
-          algorithm: { type: 'strict' },
-          onGetPriority: (groupId, config) => {
-            // 确保该父任务所有子任务结束后立即执行父任务
-            if (groupId.startsWith('g-parent')) {
-              return 10000
-            }
-            return 10
-          },
-        }),
+        strategy: new PriorityStrategy(),
         backoff: () => 1000,
         handler: async (job) => {
           execHistory.push(job.id)
