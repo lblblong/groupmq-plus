@@ -550,6 +550,13 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     }
 
     // Start stalled job checker for automatic recovery
+    // First, perform an immediate check to recover any stalled jobs from previous crashes
+    try {
+      await this.checkStalled()
+    } catch (err) {
+      this.logger.error('Error in initial stalled job check:', err)
+    }
+
     this.startStalledChecker()
 
     let connectionRetries = 0
