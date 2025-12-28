@@ -22,6 +22,30 @@ end
 -- Fetch concurrency limit (default 1)
 local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
 local activeCount = redis.call("LLEN", groupActiveKey)
+local processingKey = ns .. ":processing"
+
+-- [LAZY CLEANUP START: Clean up ghost tasks from active list]
+-- Only trigger cleanup when activeCount >= limit to avoid performance impact on happy path
+if activeCount >= limit then
+  local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
+  local prunedCount = 0
+
+  for _, jobId in ipairs(activeJobs) do
+    -- Validate against processing ZSET as the authoritative source
+    local score = redis.call("ZSCORE", processingKey, jobId)
+    if not score then
+      -- Found a ghost task - remove it immediately
+      redis.call("LREM", groupActiveKey, 0, jobId)
+      prunedCount = prunedCount + 1
+    end
+  end
+
+  -- Adjust activeCount if we pruned ghost tasks
+  if prunedCount > 0 then
+    activeCount = math.max(0, activeCount - prunedCount)
+  end
+end
+-- [LAZY CLEANUP END]
 
 -- Logic: Can we reserve?
 local canReserve = false
