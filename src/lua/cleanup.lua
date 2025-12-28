@@ -18,6 +18,7 @@ for _, jobId in ipairs(expiredJobs) do
     local gid = procData[1]
     local deadlineAt = tonumber(procData[2])
     if gid and deadlineAt and now > deadlineAt then
+      local jobKey = ns .. ":job:" .. jobId
       local jobData = redis.call("HMGET", jobKey, "score", "delayUntil")
       local jobScore = tonumber(jobData[1])
       local delayUntil = tonumber(jobData[2]) or 0
