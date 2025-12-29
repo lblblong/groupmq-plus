@@ -1,5 +1,6 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/group-lifecycle/cleanup-if-group-empty"
+--- @include "includes/job-lifecycle/record-job-finalization"
 
 -- Complete a job: unlock group AND record metadata atomically in one call
 -- argv: ns, jobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
@@ -165,79 +166,8 @@ end
 -- [PHASE 3 MODIFICATION END]
 
 -- Part 2: Record job metadata (completed or failed)
-if status == "completed" then
-  local completedKey = ns .. ":completed"
-  
-  -- CRITICAL: Always set final status first, even if job will be deleted
-  -- This ensures any concurrent reads see "completed", not "completing"
-  redis.call("HSET", jobKey, "status", "completed")
-  
-  if keepCompleted > 0 then
-    -- Store full job metadata and add to completed set
-    redis.call("HSET", jobKey, 
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts,
-      "returnvalue", resultOrError
-    )
-    redis.call("ZADD", completedKey, timestamp, jobId)
-    
-    -- Trim old entries atomically
-    local zcount = redis.call("ZCARD", completedKey)
-    local toRemove = zcount - keepCompleted
-    if toRemove > 0 then
-      local oldIds = redis.call("ZRANGE", completedKey, 0, toRemove - 1)
-      if #oldIds > 0 then
-        redis.call("ZREMRANGEBYRANK", completedKey, 0, toRemove - 1)
-        for i = 1, #oldIds do
-          local oldId = oldIds[i]
-          redis.call("DEL", ns .. ":job:" .. oldId)
-          redis.call("DEL", ns .. ":unique:" .. oldId)
-          redis.call("DEL", ns .. ":flow:results:" .. oldId)
-        end
-      end
-    end
-  else
-    -- keepCompleted == 0: Delete immediately (status already set above)
-    redis.call("DEL", jobKey)
-    redis.call("DEL", ns .. ":unique:" .. jobId)
-    redis.call("DEL", ns .. ":flow:results:" .. jobId)
-  end
-  
-elseif status == "failed" then
-  local failedKey = ns .. ":failed"
-  local errorInfo = cjson.decode(resultOrError)
-  
-  -- CRITICAL: Always set final status first, even if job will be deleted
-  redis.call("HSET", jobKey, "status", "failed")
-  
-  if keepFailed > 0 then
-    redis.call("HSET", jobKey,
-      "failedReason", errorInfo.message or "Error",
-      "failedName", errorInfo.name or "Error",
-      "stacktrace", errorInfo.stack or "",
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts
-    )
-    redis.call("ZADD", failedKey, timestamp, jobId)
-  else
-    -- Delete job (status already set above)
-    redis.call("DEL", jobKey)
-    redis.call("DEL", ns .. ":unique:" .. jobId)
-    redis.call("DEL", ns .. ":flow:results:" .. jobId)
-  end
-end
-
--- Publish completion/failure event for waiters
-local eventPayload = cjson.encode({
-  id = jobId,
-  status = status,
-  result = resultOrError
-})
-redis.call("PUBLISH", ns .. ":events", eventPayload)
+local keepCount = (status == "completed") and keepCompleted or keepFailed
+recordJobFinalization(ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts)
 
 return 1
 

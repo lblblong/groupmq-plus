@@ -1,18 +1,38 @@
--- 入参: ns, jobId, status, resultOrError, finishedOn, keepCount
+-- 入参: ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts
 -- 功能: 原子性地记录完成/失败状态，应用保留策略
 -- status: "completed" 或 "failed"
 -- keepCount: 保留记录数，0表示立即删除
 -- 返回: "recorded"
 
-local function recordJobFinalization(ns, jobId, status, resultOrError, finishedOn, keepCount)
+local function recordJobFinalization(ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts)
   local jobKey = ns .. ":job:" .. jobId
   local statusKey = (status == "completed") and (ns .. ":completed") or (ns .. ":failed")
 
   -- 记录状态和时间戳
   redis.call("HSET", jobKey, "status", status, "finishedOn", finishedOn)
 
+  -- 根据状态保存完整元数据
+  if status == "completed" then
+    redis.call("HSET", jobKey,
+      "processedOn", processedOn or "",
+      "attempts", attempts or "",
+      "maxAttempts", maxAttempts or "",
+      "returnvalue", resultOrError
+    )
+  elseif status == "failed" then
+    local errorInfo = cjson.decode(resultOrError)
+    redis.call("HSET", jobKey,
+      "failedReason", errorInfo.message or "Error",
+      "failedName", errorInfo.name or "Error",
+      "stacktrace", errorInfo.stack or "",
+      "processedOn", processedOn or "",
+      "attempts", attempts or "",
+      "maxAttempts", maxAttempts or ""
+    )
+  end
+
   if keepCount and keepCount > 0 then
-    -- 保存完整元数据
+    -- 保存到完成/失败集合
     redis.call("ZADD", statusKey, finishedOn, jobId)
 
     -- 修剪旧的记录
@@ -32,8 +52,9 @@ local function recordJobFinalization(ns, jobId, status, resultOrError, finishedO
 
   -- 发布事件
   redis.call("PUBLISH", ns .. ":events", cjson.encode({
-    type = status,
-    jobId = jobId
+    id = jobId,
+    status = status,
+    result = resultOrError
   }))
 
   return "recorded"

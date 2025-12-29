@@ -1,5 +1,7 @@
+--- @include "includes/job-lifecycle/record-job-finalization"
+
 -- Record job completion or failure with retention management
--- argv: ns, jobId, status ('completed' | 'failed'), timestamp, result/error (JSON), 
+-- argv: ns, jobId, status ('completed' | 'failed'), timestamp, result/error (JSON),
 --       keepCompleted, keepFailed, processedOn, finishedOn, attempts, maxAttempts, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
@@ -103,83 +105,13 @@ if parentId then
 end
 -- [PHASE 3 MODIFICATION END]
 
-if status == "completed" then
-  local completedKey = ns .. ":completed"
-  
-  if keepCompleted > 0 then
-    -- Store job metadata and add to completed set
-    redis.call("HSET", jobKey, 
-      "status", "completed",
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts,
-      "returnvalue", resultOrError
-    )
-    redis.call("ZADD", completedKey, timestamp, jobId)
-    -- Ensure idempotence mapping exists
-    redis.call("SET", ns .. ":unique:" .. jobId, jobId)
-    
-    -- Trim old entries atomically
-    local zcount = redis.call("ZCARD", completedKey)
-    local toRemove = zcount - keepCompleted
-    if toRemove > 0 then
-      local oldIds = redis.call("ZRANGE", completedKey, 0, toRemove - 1)
-      if #oldIds > 0 then
-        redis.call("ZREMRANGEBYRANK", completedKey, 0, toRemove - 1)
-        -- Batch delete old jobs and unique keys
-        local keysToDelete = {}
-        for i = 1, #oldIds do
-          local oldId = oldIds[i]
-          table.insert(keysToDelete, ns .. ":job:" .. oldId)
-          table.insert(keysToDelete, ns .. ":unique:" .. oldId)
-        end
-        if #keysToDelete > 0 then
-          redis.call("DEL", unpack(keysToDelete))
-        end
-      end
-    end
-  else
-    -- keepCompleted == 0: Delete immediately (batch operation)
-    redis.call("DEL", jobKey, ns .. ":unique:" .. jobId)
-  end
-  
-elseif status == "failed" then
-  local failedKey = ns .. ":failed"
-  
-  -- Parse error info from resultOrError JSON
-  -- Expected format: {"message":"...", "name":"...", "stack":"..."}
-  local errorInfo = cjson.decode(resultOrError)
-  
-  if keepFailed > 0 then
-    -- Store failure metadata
-    redis.call("HSET", jobKey,
-      "status", "failed",
-      "failedReason", errorInfo.message or "Error",
-      "failedName", errorInfo.name or "Error",
-      "stacktrace", errorInfo.stack or "",
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts
-    )
-    redis.call("ZADD", failedKey, timestamp, jobId)
-    
-    -- Note: No retention trimming for failed jobs (let clean() handle it)
-  else
-    -- keepFailed == 0: Delete immediately (batch operation)
-    redis.call("DEL", jobKey, ns .. ":unique:" .. jobId)
-  end
-end
+-- Record job metadata (status, timestamps, metadata)
+local keepCount = (status == "completed") and keepCompleted or keepFailed
+recordJobFinalization(ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts)
 
--- Publish completion/failure event for waiters
-if status == "completed" or status == "failed" then
-  local eventPayload = cjson.encode({
-    id = jobId,
-    status = status,
-    result = resultOrError
-  })
-  redis.call("PUBLISH", ns .. ":events", eventPayload)
+-- For completed jobs, ensure idempotence mapping exists
+if status == "completed" and keepCompleted > 0 then
+  redis.call("SET", ns .. ":unique:" .. jobId, jobId)
 end
 
 return 1
