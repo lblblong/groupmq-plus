@@ -1,5 +1,6 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/delayed-handling/promote-delayed-job-complete"
 
 -- argv: ns, jobId, newDelayUntil, now
 local ns = KEYS[1]
@@ -68,23 +69,8 @@ if newDelayUntil > 0 and newDelayUntil > now then
     end
   end
 else
-  -- Job should be ready immediately: remove from delayed and ADD to group ZSET
-  redis.call("HSET", jobKey, "status", "waiting")
-  if inDelayed then
-    redis.call("ZREM", delayedKey, jobId)
-  end
-  
-  local score = tonumber(redis.call("HGET", jobKey, "score"))
-  if score then
-    redis.call("ZADD", gZ, score, jobId)
-  end
-  
-  -- [LIMITED GROUP SET] Check group capacity and update ready/limited
-  local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if head and #head >= 2 then
-    local headScore = tonumber(head[2])
-    updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
-  end
+  -- Job should be ready immediately: promote using standard function
+  promoteDelayedJobToWaiting(ns, jobId, delayedKey, readyKey, limitedKey)
 end
 
 return 1

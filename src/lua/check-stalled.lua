@@ -1,5 +1,6 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/stalled-recovery/recover-stalled-jobs-complete"
 
 -- Check for stalled jobs and move them back to waiting or fail them
 -- KEYS: namespace, currentTime, gracePeriod, maxStalledCount
@@ -28,102 +29,8 @@ local groupsKey = ns .. ":groups"
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
 
--- Candidates: jobs whose deadlines are past
-local candidates = redis.call("ZRANGEBYSCORE", processingKey, 0, now - gracePeriod, "LIMIT", 0, 100)
-if not candidates or #candidates == 0 then
-  return {}
-end
-
-local results = {}
-
-for _, jobId in ipairs(candidates) do
-  local jobKey = ns .. ":job:" .. jobId
-  local h = redis.call("HMGET", jobKey, "groupId","stalledCount","maxAttempts","attempts","status","finishedOn","score","delayUntil")
-  local groupId = h[1]
-  if groupId then
-    local stalledCount = tonumber(h[2]) or 0
-    local maxAttempts = tonumber(h[3]) or 3
-    local attempts = tonumber(h[4]) or 0
-    local status = h[5]
-    local finishedOn = tonumber(h[6] or "0")
-    local score = tonumber(h[7])
-    local delayUntil = tonumber(h[8] or "0")
-    -- CRITICAL: Don't recover jobs that are completing (prevents race with completion)
-    -- "completing" is a temporary state set by complete-with-metadata.lua to prevent races
-    if status == "processing" then
-      stalledCount = stalledCount + 1
-      attempts = attempts + 1
-      redis.call("HSET", jobKey, "stalledCount", stalledCount, "attempts", attempts)
-      -- BullMQ-style: Remove from per-group active list
-      local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-      redis.call("LREM", groupActiveKey, 1, jobId)
-      
-      -- Determine if job should fail
-      local shouldFail = false
-      local failReason = ""
-      
-      if stalledCount >= maxStalledCount and maxStalledCount > 0 then
-        shouldFail = true
-        failReason = "Job stalled " .. stalledCount .. " times (max: " .. maxStalledCount .. ")"
-      elseif attempts > maxAttempts then
-        shouldFail = true
-        failReason = "Job exceeded max attempts (" .. attempts .. "/" .. maxAttempts .. ") due to stalls"
-      end
-      
-      if shouldFail then
-        -- Common failure handling
-        redis.call("ZREM", processingKey, jobId)
-        local groupKey = ns .. ":g:" .. groupId
-        redis.call("ZREM", groupKey, jobId)
-        redis.call("DEL", ns .. ":processing:" .. jobId)
-        redis.call("HSET", jobKey, "status","failed","finishedOn", now, "failedReason", failReason)
-        redis.call("ZADD", ns .. ":failed", now, jobId)
-        table.insert(results, jobId); table.insert(results, groupId); table.insert(results, "failed")
-      else
-        -- Recover job to waiting or delayed state
-        local stillInProcessing = redis.call("ZSCORE", processingKey, jobId)
-        if stillInProcessing then
-          redis.call("ZREM", processingKey, jobId)
-          redis.call("DEL", ns .. ":processing:" .. jobId)
-          
-          local groupKey2 = ns .. ":g:" .. groupId
-          
-          if delayUntil > 0 and delayUntil > now then
-            -- [PHYSICAL SEPARATION] Job is still delayed, add to delayed set ONLY
-            redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
-            redis.call("HSET", jobKey, "status", "delayed")
-            
-            -- Update group status in ready/limited (it might have been the head)
-            local head = redis.call("ZRANGE", groupKey2, 0, 0, "WITHSCORES")
-            if head and #head >= 2 then
-              local headScore = tonumber(head[2])
-              if redis.call("ZSCORE", readyKey, groupId) then
-                redis.call("ZADD", readyKey, headScore, groupId)
-              elseif redis.call("ZSCORE", limitedKey, groupId) then
-                redis.call("ZADD", limitedKey, headScore, groupId)
-              end
-            end
-            table.insert(results, jobId); table.insert(results, groupId); table.insert(results, "delayed")
-          elseif score then
-            -- Recover to waiting state
-            redis.call("ZADD", groupKey2, score, jobId)
-            redis.call("HSET", jobKey, "status", "waiting")
-            
-            local head = redis.call("ZRANGE", groupKey2, 0, 0, "WITHSCORES")
-            if head and #head >= 2 then
-              local headScore = tonumber(head[2])
-
-              -- [LIMITED GROUP SET] Check if group can go to ready or should stay in limited
-              updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
-            end
-            redis.call("SADD", groupsKey, groupId)
-            table.insert(results, jobId); table.insert(results, groupId); table.insert(results, "recovered")
-          end
-        end
-      end
-    end
-  end
-end
+-- Call the stalled recovery function
+local results = recoverStalledJobsCompletely(ns, now, gracePeriod, maxStalledCount)
 
 return results
 

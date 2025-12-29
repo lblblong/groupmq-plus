@@ -1,4 +1,4 @@
---- @include "../group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- 入参: ns, jobId, parentId, status, resultOrError
 -- 功能: 记录子任务结果，递减计数，可能激活父任务

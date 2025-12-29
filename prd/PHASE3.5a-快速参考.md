@@ -40,8 +40,8 @@ return updateGroupReadyLimitedState  -- 删除这行
 ### 3. 替换模式
 
 **步骤**:
-1. 在脚本顶部添加 `@include` 指令
-2. 找到重复代码块
+1. 找到重复代码块
+2. 在脚本顶部添加 `@include` 指令
 3. 用单行函数调用替换
 4. 验证参数顺序正确
 
@@ -108,14 +108,5 @@ updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
 
 ---
 
-## 🧪 验证步骤
-
-每次修改后：
-```bash
-npm test
-# 确保所有测试通过
-```
-
----
 
 **Next Session**: 基于此快速参考启动 Phase 3.5b

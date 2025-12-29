@@ -1,4 +1,5 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/delayed-handling/promote-delayed-job-complete"
 
 -- argv: ns, now
 local ns = KEYS[1]
@@ -16,45 +17,17 @@ end
 
 local jobId = ids[1]
 
--- Try to remove it atomically; if another scheduler raced, ZREM will return 0
-local removed = redis.call("ZREM", delayedKey, jobId)
-if removed == 0 then
+-- Promote the job using the standard function
+-- (This function includes ZREM of the delayedKey internally)
+local result = promoteDelayedJobToWaiting(ns, jobId, delayedKey, readyKey, limitedKey)
+
+-- Convert result to numeric return value
+if result == "promoted" then
+  return 1
+elseif result == "not-found" then
   return 0
+else
+  return 1 -- treat other cases as moved
 end
-
--- Determine its group and update ready queue if it was the head
-local jobKey = ns .. ":job:" .. jobId
-local groupId = redis.call("HGET", jobKey, "groupId")
-if not groupId then
-  return 1 -- treat as moved even if metadata missing
-end
-
--- Mark job as waiting (no longer delayed)
-redis.call("HSET", jobKey, "status", "waiting")
-redis.call("HDEL", jobKey, "runAt", "delayUntil")
-
-local gZ = ns .. ":g:" .. groupId
-local score = tonumber(redis.call("HGET", jobKey, "score"))
-if score then
-  -- [PHYSICAL SEPARATION] Add back to group ZSET
-  redis.call("ZADD", gZ, score, jobId)
-  redis.call("SADD", ns .. ":groups", groupId)
-  
-  local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if head and #head >= 2 then
-    local headJobId = head[1]
-    local headScore = tonumber(head[2])
-    
-    local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-    local configKey = ns .. ":config:" .. groupId
-    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-    local currentActive = redis.call("LLEN", groupActiveKey)
-    
-    -- [LIMITED GROUP SET] Check group capacity
-    updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
-  end
-end
-
-return 1
 
 
