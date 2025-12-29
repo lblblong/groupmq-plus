@@ -1,3 +1,6 @@
+--- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/ghost-cleanup/detect-ghost-tasks"
+
 -- argv: ns, nowEpochMs, vtMs, scanLimit, token
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -72,12 +75,7 @@ if (not groups or #groups == 0) or shouldCheckStalled then
           if head and #head >= 2 then
             local headScore = tonumber(head[2])
             -- [LIMITED GROUP SET] Check group capacity after stalled recovery
-            local groupActiveKey = ns .. ":g:" .. gid .. ":active"
-            local configKey = ns .. ":config:" .. gid
-            local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-            local currentActive = redis.call("LLEN", groupActiveKey)
-            
-            if currentActive >= limit then
+            if isGroupAtCapacity(ns, gid) then
               -- Group is still full, add to limited instead of ready
               redis.call("ZREM", readyKey, gid)
               redis.call("ZADD", limitedKey, headScore, gid)
@@ -136,22 +134,17 @@ for i = 1, #groups, 2 do
   -- [LAZY CLEANUP START: Clean up ghost tasks from active list]
   -- Only trigger cleanup when activeCount >= limit to avoid performance impact on happy path
   if activeCount >= limit then
-    local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
-    local prunedCount = 0
-
-    for _, jobId in ipairs(activeJobs) do
-      -- Validate against processing ZSET as the authoritative source
-      local score = redis.call("ZSCORE", processingKey, jobId)
-      if not score then
-        -- Found a ghost task - remove it immediately
-        redis.call("LREM", groupActiveKey, 0, jobId)
-        prunedCount = prunedCount + 1
+    local ghostCount = detectGhostTasks(ns, gid, processingKey)
+    if ghostCount > 0 then
+      -- Remove all ghost tasks from active list
+      local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
+      for _, jobId in ipairs(activeJobs) do
+        local score = redis.call("ZSCORE", processingKey, jobId)
+        if not score then
+          redis.call("LREM", groupActiveKey, 0, jobId)
+        end
       end
-    end
-
-    -- Adjust activeCount if we pruned ghost tasks
-    if prunedCount > 0 then
-      activeCount = math.max(0, activeCount - prunedCount)
+      activeCount = math.max(0, activeCount - ghostCount)
     end
   end
   -- [LAZY CLEANUP END]
@@ -237,16 +230,11 @@ local processingKey2 = ns .. ":processing"
 redis.call("ZADD", processingKey2, deadline, id)
 
 -- [LIMITED GROUP SET] Update ready/limited status
-local groupActiveKey = ns .. ":g:" .. chosenGid .. ":active"
-local configKey = ns .. ":config:" .. chosenGid
-local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-local currentActive = redis.call("LLEN", groupActiveKey)
-
 local gZ = ns .. ":g:" .. chosenGid
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextScore = tonumber(nextHead[2])
-  if currentActive < limit then
+  if not isGroupAtCapacity(ns, chosenGid) then
     redis.call("ZADD", readyKey, nextScore, chosenGid)
   else
     redis.call("ZADD", limitedKey, nextScore, chosenGid)

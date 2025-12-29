@@ -1,3 +1,5 @@
+--- @include "includes/concurrency-control/is-group-at-capacity"
+
 -- Check for stalled jobs and move them back to waiting or fail them
 -- KEYS: namespace, currentTime, gracePeriod, maxStalledCount
 -- Returns: array of [jobId, groupId, action] for each stalled job found
@@ -109,13 +111,9 @@ for _, jobId in ipairs(candidates) do
             local head = redis.call("ZRANGE", groupKey2, 0, 0, "WITHSCORES")
             if head and #head >= 2 then
               local headScore = tonumber(head[2])
-              local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-              local configKey = ns .. ":config:" .. groupId
-              local currentActive = redis.call("LLEN", groupActiveKey)
-              local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-              
+
               -- [LIMITED GROUP SET] Check if group can go to ready or should stay in limited
-              if currentActive < limit then
+              if not isGroupAtCapacity(ns, groupId) then
                 redis.call("ZREM", limitedKey, groupId)
                 redis.call("ZADD", readyKey, headScore, groupId)
               else

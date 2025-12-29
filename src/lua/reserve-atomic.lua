@@ -1,3 +1,5 @@
+--- @include "includes/ghost-cleanup/detect-ghost-tasks"
+
 -- Atomic reserve operation that checks lock/limit and reserves in one operation
 -- argv: ns, nowEpochMs, vtMs, targetGroupId, allowedJobId (optional), token
 local ns = KEYS[1]
@@ -27,22 +29,17 @@ local processingKey = ns .. ":processing"
 -- [LAZY CLEANUP START: Clean up ghost tasks from active list]
 -- Only trigger cleanup when activeCount >= limit to avoid performance impact on happy path
 if activeCount >= limit then
-  local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
-  local prunedCount = 0
-
-  for _, jobId in ipairs(activeJobs) do
-    -- Validate against processing ZSET as the authoritative source
-    local score = redis.call("ZSCORE", processingKey, jobId)
-    if not score then
-      -- Found a ghost task - remove it immediately
-      redis.call("LREM", groupActiveKey, 0, jobId)
-      prunedCount = prunedCount + 1
+  local ghostCount = detectGhostTasks(ns, targetGroupId, processingKey)
+  if ghostCount > 0 then
+    -- Remove all ghost tasks from active list
+    local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
+    for _, jobId in ipairs(activeJobs) do
+      local score = redis.call("ZSCORE", processingKey, jobId)
+      if not score then
+        redis.call("LREM", groupActiveKey, 0, jobId)
+      end
     end
-  end
-
-  -- Adjust activeCount if we pruned ghost tasks
-  if prunedCount > 0 then
-    activeCount = math.max(0, activeCount - prunedCount)
+    activeCount = math.max(0, activeCount - ghostCount)
   end
 end
 -- [LAZY CLEANUP END]

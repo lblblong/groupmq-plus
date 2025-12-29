@@ -1,3 +1,5 @@
+--- @include "includes/concurrency-control/is-group-at-capacity"
+
 -- argv: ns, jobId, groupId, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
@@ -9,7 +11,7 @@ local limitedKey = ns .. ":limited"
 
 local jobKey = ns .. ":job:" .. jobId
 
--- [NEW] Token verification: Ensure only the correct worker can dead-letter the job
+-- Token verification: Ensure only the correct worker can dead-letter the job
 local procKey = ns .. ":processing:" .. jobId
 local storedToken = redis.call("HGET", procKey, "token")
 
@@ -57,21 +59,15 @@ else
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    local configKey = ns .. ":config:" .. groupId
-    local currentActive = redis.call("LLEN", groupActiveKey)
-    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-    
+
     -- [LIMITED GROUP SET] Check if we can move from limited to ready
-    if currentActive < limit then
+    if not isGroupAtCapacity(ns, groupId) then
       redis.call("ZREM", limitedKey, groupId)
       redis.call("ZADD", readyKey, headScore, groupId)
-    elseif currentActive >= limit then
+    else
       -- Still full, ensure in limited
       redis.call("ZREM", readyKey, groupId)
       redis.call("ZADD", limitedKey, headScore, groupId)
-    else
-      -- Fallback: add to ready
-      redis.call("ZADD", readyKey, headScore, groupId)
     end
   end
 end
