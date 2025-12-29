@@ -274,7 +274,8 @@ export class PriorityStrategy implements DispatchStrategy {
       ) as string;
     }
 
-    const rawGroups: LuaGroupResult[] = resultJson ? JSON.parse(resultJson) : [];
+    const parsed = resultJson ? JSON.parse(resultJson) : [];
+    const rawGroups: LuaGroupResult[] = Array.isArray(parsed) ? parsed : [];
 
     if (rawGroups.length === 0) {
       return null;

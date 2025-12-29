@@ -268,7 +268,7 @@ export type WorkerOptions<T> = {
    * Maximum number of times a job can become stalled before being failed.
    * A job becomes stalled when its worker crashes or loses connection.
    *
-   * @default 1
+   * @default 2
    * @example 2 // Allow jobs to stall twice before failing
    * @example 0 // Never fail jobs due to stalling (not recommended)
    *
@@ -403,7 +403,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     this.stalledInterval =
       opts.stalledInterval ?? (this.concurrency > 50 ? 60000 : 30000) // 60s for high concurrency, 30s otherwise
     this.maxStalledCount =
-      opts.maxStalledCount ?? (this.concurrency > 50 ? 2 : 1) // Allow 2 stalls for high concurrency
+      opts.maxStalledCount ?? 2 // Allow 2 stalls for high concurrency
     // CRITICAL: Grace period must be >= heartbeat startup delay to prevent false positives
     // Default 5s covers heartbeat startup (2s) + 1 heartbeat interval (2s) + network/load buffer (1s)
     this.stalledGracePeriod = opts.stalledGracePeriod ?? 5000 // 5s grace for all configurations
