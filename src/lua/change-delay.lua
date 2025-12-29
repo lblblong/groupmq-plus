@@ -1,4 +1,5 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- argv: ns, jobId, newDelayUntil, now
 local ns = KEYS[1]
@@ -82,16 +83,7 @@ else
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-
-    if isGroupAtCapacity(ns, groupId) then
-      -- Group is full, move to limited
-      redis.call("ZREM", readyKey, groupId)
-      redis.call("ZADD", limitedKey, headScore, groupId)
-    else
-      -- Group has slots, move to ready
-      redis.call("ZREM", limitedKey, groupId)
-      redis.call("ZADD", readyKey, headScore, groupId)
-    end
+    updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
   end
 end
 

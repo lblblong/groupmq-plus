@@ -1,3 +1,6 @@
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/group-lifecycle/cleanup-if-group-empty"
+
 -- Complete a job: unlock group AND record metadata atomically in one call
 -- argv: ns, jobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
 --       processedOn, finishedOn, attempts, maxAttempts, token
@@ -104,14 +107,7 @@ else
       local currentActive = redis.call("LLEN", groupActiveKey)
       
       -- [LIMITED GROUP SET] Check if we can move from limited to ready
-      if currentActive < limit then
-        redis.call("ZREM", limitedKey, gid)
-        redis.call("ZADD", readyKey, nextScore, gid)
-      elseif currentActive >= limit and redis.call("ZSCORE", readyKey, gid) then
-        -- Group is now full, move from ready to limited
-        redis.call("ZREM", readyKey, gid)
-        redis.call("ZADD", limitedKey, nextScore, gid)
-      end
+      updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, nextScore)
     end
   end
 end
@@ -160,16 +156,8 @@ if parentId then
          local pConfigKey = ns .. ":config:" .. parentGroupId
          local pLimit = tonumber(redis.call("HGET", pConfigKey, "concurrency")) or 1
          local pCurrentActive = redis.call("LLEN", pGroupActiveKey)
-         
-         if pCurrentActive >= pLimit then
-           -- Parent group is full, move to limited
-           redis.call("ZREM", readyKey, parentGroupId)
-           redis.call("ZADD", limitedKey, pHeadScore, parentGroupId)
-         else
-           -- Parent group has slots, move to ready
-           redis.call("ZREM", limitedKey, parentGroupId)
-           redis.call("ZADD", readyKey, pHeadScore, parentGroupId)
-         end
+
+         updateGroupReadyLimitedState(ns, parentGroupId, readyKey, limitedKey, pHeadScore)
       end
     end
   end

@@ -1,5 +1,6 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- argv: ns, nowEpochMs, vtMs, maxBatch, tokenBase
 local ns = KEYS[1]
@@ -67,20 +68,12 @@ if (now - lastCheck) >= stalledCheckInterval then
             -- Recover to waiting state
             redis.call("ZADD", gZ, jobScore, jobId)
             redis.call("HSET", jobKey, "status", "waiting")
-            
+
             local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
             if head and #head >= 2 then
               local headScore = tonumber(head[2])
               -- [LIMITED GROUP SET] Check group capacity after stalled recovery
-              if isGroupAtCapacity(ns, gid) then
-                -- Group is still full, add to limited instead of ready
-                redis.call("ZREM", readyKey, gid)
-                redis.call("ZADD", limitedKey, headScore, gid)
-              else
-                -- Group has capacity, add to ready
-                redis.call("ZREM", limitedKey, gid)
-                redis.call("ZADD", readyKey, headScore, gid)
-              end
+              updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, headScore)
             end
           end
           -- [FIX] Remove from active list to prevent ghost concurrency
@@ -178,13 +171,7 @@ for i = 1, #groups, 2 do
             local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
             if nextHead and #nextHead >= 2 then
               local nextScore = tonumber(nextHead[2])
-              -- After this job, check if group will be at capacity
-              local newActiveCount = activeCount + 1
-              if newActiveCount < limit then
-                redis.call("ZADD", readyKey, nextScore, gid)
-              else
-                redis.call("ZADD", limitedKey, nextScore, gid)
-              end
+              updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, nextScore)
             end
 
 
@@ -200,8 +187,7 @@ for i = 1, #groups, 2 do
     local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if nextHead and #nextHead >= 2 then
       local nextScore = tonumber(nextHead[2])
-      redis.call("ZREM", readyKey, gid)
-      redis.call("ZADD", limitedKey, nextScore, gid)
+      updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, nextScore)
     end
   end
   -- [PHASE 2 MODIFICATION END]

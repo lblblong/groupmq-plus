@@ -1,3 +1,5 @@
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
+
 -- argv: ns, groupId, dataJson, maxAttempts, orderMs, delayUntil, jobId, keepCompleted, clientTimestamp, orderingDelayMs, groupConfigJson
 local ns = KEYS[1]
 local groupId = ARGV[1]
@@ -169,16 +171,7 @@ else
     local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
     local activeCount = redis.call("LLEN", groupActiveKey)
     
-    if activeCount >= limit then
-      -- Group is at capacity, add to limited instead of ready
-      redis.call("ZREM", readyKey, groupId)
-      redis.call("ZADD", limitedKey, headScore, groupId)
-    else
-      -- Group has capacity, add to ready
-      -- IMPORTANT: If group was in limited, move it out since new higher-priority task may be available
-      redis.call("ZREM", limitedKey, groupId)
-      redis.call("ZADD", readyKey, headScore, groupId)
-    end
+    updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
   end
 end
 

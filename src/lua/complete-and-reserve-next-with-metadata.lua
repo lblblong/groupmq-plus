@@ -1,3 +1,5 @@
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
+
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
 --       processedOn, finishedOn, attempts, maxAttempts, now, vt, currentJobToken, nextJobToken
@@ -101,15 +103,7 @@ if status == "completed" then
            local pLimit = tonumber(redis.call("HGET", pConfigKey, "concurrency")) or 1
            local pCurrentActive = redis.call("LLEN", pGroupActiveKey)
            
-           if pCurrentActive >= pLimit then
-             -- Parent group is full, move to limited
-             redis.call("ZREM", readyKey, parentGroupId)
-             redis.call("ZADD", limitedKey, pHeadScore, parentGroupId)
-           else
-             -- Parent group has slots, move to ready
-             redis.call("ZREM", limitedKey, parentGroupId)
-             redis.call("ZADD", readyKey, pHeadScore, parentGroupId)
-           end
+           updateGroupReadyLimitedState(ns, parentGroupId, readyKey, limitedKey, pHeadScore)
         end
       end
     end
@@ -268,13 +262,7 @@ local currentActive = redis.call("LLEN", groupActiveKey)
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextHeadScore = tonumber(nextHead[2])
-  if currentActive < limit then
-    redis.call("ZREM", limitedKey, groupId)
-    redis.call("ZADD", readyKey, nextHeadScore, groupId)
-  else
-    redis.call("ZREM", readyKey, groupId)
-    redis.call("ZADD", limitedKey, nextHeadScore, groupId)
-  end
+  updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, nextHeadScore)
 else
   -- No more jobs in gZ
   redis.call("ZREM", readyKey, groupId)

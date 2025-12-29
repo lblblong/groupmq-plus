@@ -1,4 +1,5 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- Check for stalled jobs and move them back to waiting or fail them
 -- KEYS: namespace, currentTime, gracePeriod, maxStalledCount
@@ -113,13 +114,7 @@ for _, jobId in ipairs(candidates) do
               local headScore = tonumber(head[2])
 
               -- [LIMITED GROUP SET] Check if group can go to ready or should stay in limited
-              if not isGroupAtCapacity(ns, groupId) then
-                redis.call("ZREM", limitedKey, groupId)
-                redis.call("ZADD", readyKey, headScore, groupId)
-              else
-                redis.call("ZREM", readyKey, groupId)
-                redis.call("ZADD", limitedKey, headScore, groupId)
-              end
+              updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
             end
             redis.call("SADD", groupsKey, groupId)
             table.insert(results, jobId); table.insert(results, groupId); table.insert(results, "recovered")

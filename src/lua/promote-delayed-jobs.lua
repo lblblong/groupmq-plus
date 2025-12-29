@@ -1,3 +1,5 @@
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
+
 -- argv: ns, now
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -42,15 +44,7 @@ for i = 1, #readyJobs do
         local currentActive = redis.call("LLEN", groupActiveKey)
         
         -- [LIMITED GROUP SET] Check group capacity
-        if currentActive >= limit then
-          -- Group is full, move to limited
-          redis.call("ZREM", readyKey, groupId)
-          redis.call("ZADD", limitedKey, headScore, groupId)
-        else
-          -- Group has slots, move to ready
-          redis.call("ZREM", limitedKey, groupId)
-          redis.call("ZADD", readyKey, headScore, groupId)
-        end
+        updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
         promotedCount = promotedCount + 1
       end
     end

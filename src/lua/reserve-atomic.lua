@@ -1,4 +1,5 @@
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- Atomic reserve operation that checks lock/limit and reserves in one operation
 -- argv: ns, nowEpochMs, vtMs, targetGroupId, allowedJobId (optional), token
@@ -73,8 +74,7 @@ if not canReserve then
     -- Check if group has any waiting tasks
     if redis.call("ZCARD", gZ) > 0 then
       -- Move to limited instead of ready
-      redis.call("ZREM", readyKey, targetGroupId)
-      redis.call("ZADD", limitedKey, headScore, targetGroupId)
+      updateGroupReadyLimitedState(ns, targetGroupId, readyKey, limitedKey, headScore)
     end
   end
   -- [PHASE 2 MODIFICATION] 返回明确的 E_LIMIT 标识（并发已满）
