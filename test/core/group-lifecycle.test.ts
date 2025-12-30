@@ -316,10 +316,13 @@ describe('并发限制 (Limited Set - Hot Spot Issues解决方案)', () => {
     ).reduce((a, b) => a + b, 0);
     expect(processed.length).toBe(totalJobs);
 
-    if (stateSnapshots.length > 0) {
-      const lastSnapshot = stateSnapshots[stateSnapshots.length - 1];
-      expect(lastSnapshot.ready + lastSnapshot.limited).toBe(0);
-    }
+    // 验证处理过程中有状态转换发生
+    expect(stateSnapshots.length).toBeGreaterThan(0);
+
+    // 验证最终状态：所有任务完成后，ready 和 limited 应该都为 0
+    const finalReady = await redis.zcard(`groupmq:${namespace}:ready`);
+    const finalLimited = await redis.zcard(`groupmq:${namespace}:limited`);
+    expect(finalReady + finalLimited).toBe(0);
   });
 });
 

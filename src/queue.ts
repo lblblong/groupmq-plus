@@ -5,6 +5,7 @@ import { type Job, Job as JobEntity } from './job'
 import { Logger, type LoggerInterface } from './logger'
 import { evalScript } from './lua/loader'
 import type { Status } from './status'
+import { type WaitForEmptyOptions, type QueueStateSnapshot, WaitForEmptyTimeoutError } from './helpers'
 
 /**
  * 组配置选项（用于 queue.add 的 groupConfig 参数）
@@ -2068,6 +2069,36 @@ export class Queue<T = any> {
   }
 
   /**
+   * Get the number of jobs in staging (waiting for orderingDelayMs)
+   */
+  async getStagedCount(): Promise<number> {
+    return this.r.zcard(`${this.ns}:stage`)
+  }
+
+  /**
+   * Get the number of groups in ready state
+   */
+  async getReadyGroupCount(): Promise<number> {
+    return this.r.zcard(`${this.ns}:ready`)
+  }
+
+  /**
+   * Get a snapshot of the current queue state for debugging
+   */
+  async getQueueStateSnapshot(): Promise<QueueStateSnapshot> {
+    const [active, waiting, delayed, staged, limited, ready] = await Promise.all([
+      this.getActiveCount(),
+      this.getWaitingCount(),
+      this.getDelayedCount(),
+      this.getStagedCount(),
+      this.getLimitedGroupCount(),
+      this.getReadyGroupCount(),
+    ]);
+
+    return { active, waiting, delayed, staged, limited, ready };
+  }
+
+  /**
    * Get list of active job IDs
    */
   async getActiveJobs(): Promise<string[]> {
@@ -2731,19 +2762,31 @@ export class Queue<T = any> {
 
   /**
    * Wait for the queue to become empty (no active jobs)
-   * @param timeoutMs Maximum time to wait in milliseconds (default: 60 seconds)
-   * @returns true if queue became empty, false if timeout reached
+   * @param optionsOrTimeout Options object or timeout in milliseconds (default: 60 seconds)
+   * @returns true if queue became empty, false if timeout reached (unless throwOnTimeout is true)
+   * @throws WaitForEmptyTimeoutError if throwOnTimeout is true and timeout is reached
    */
-  async waitForEmpty(timeoutMs = 60_000): Promise<boolean> {
+  async waitForEmpty(optionsOrTimeout: WaitForEmptyOptions | number = 60_000): Promise<boolean> {
+    const options: WaitForEmptyOptions = typeof optionsOrTimeout === 'number'
+      ? { timeoutMs: optionsOrTimeout }
+      : optionsOrTimeout;
+
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const intervalMs = options.intervalMs ?? 200;
+    // 转换布尔值为 Lua 需要的字符串 "1" 或 "0"
+    const ignoreDelayedStr = options.ignoreDelayed ? "1" : "0";
+    const ignoreStagedStr = options.ignoreStaged ? "1" : "0";
+    const throwOnTimeout = options.throwOnTimeout ?? false;
+
     const startTime = Date.now()
 
     while (Date.now() - startTime < timeoutMs) {
       try {
-        // Single atomic Lua script checks all queue structures
+        // 【优化】: 循环中只调用单一的原子 Lua 脚本
         const isEmpty = await evalScript<number>(
           this.r,
           'is-empty',
-          [this.ns],
+          [this.ns, ignoreDelayedStr, ignoreStagedStr],
           1
         )
 
@@ -2752,7 +2795,7 @@ export class Queue<T = any> {
           return true
         }
 
-        await sleep(200)
+        await sleep(intervalMs)
       } catch (err) {
         // Handle connection errors gracefully - Redis might be temporarily unavailable
         if (this.isConnectionError(err)) {
@@ -2766,6 +2809,12 @@ export class Queue<T = any> {
         // For non-connection errors, rethrow
         throw err
       }
+    }
+
+    // 【优化】: 只有在超时发生时，才去获取昂贵的全量状态快照用于报错
+    if (throwOnTimeout) {
+      const finalState = await this.getQueueStateSnapshot();
+      throw new WaitForEmptyTimeoutError(finalState, timeoutMs);
     }
 
     return false // Timeout reached

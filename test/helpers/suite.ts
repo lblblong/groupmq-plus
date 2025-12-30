@@ -1,6 +1,6 @@
 import { test as base } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { Queue, Worker, type QueueOptions, type WorkerOptions } from '../../src';
+import { Queue, Worker, type QueueOptions, type WorkerOptions, waitUntil, waitUntilOrThrow, type WaitForEmptyOptions } from '../../src';
 import { createRedis } from './redis';
 import type { Redis } from 'ioredis';
 
@@ -107,5 +107,8 @@ export const test = base.extend<GroupMQFixtures>({
     await use(q);
   },
 });
+
+// Re-export test utilities for convenience
+export { waitUntil, waitUntilOrThrow, type WaitForEmptyOptions };
 
 export { expect, describe, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';

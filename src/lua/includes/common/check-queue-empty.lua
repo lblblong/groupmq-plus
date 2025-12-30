@@ -9,26 +9,32 @@
 --   - 群组中的等待任务 (groups)
 -- 参数:
 --   ns: 命名空间
+--   ignoreDelayed: "1" 忽略延迟任务, "0" 检查延迟任务
+--   ignoreStaged: "1" 忽略暂存任务, "0" 检查暂存任务
 -- 返回:
 --   1 if 队列为空, 0 if 队列非空
 
-local function checkQueueEmpty(ns)
-  -- Check processing jobs
+local function checkQueueEmpty(ns, ignoreDelayed, ignoreStaged)
+  -- Check processing jobs (Active)
   local processingCount = redis.call("ZCARD", ns .. ":processing")
   if processingCount > 0 then
     return 0
   end
 
-  -- Check delayed jobs
-  local delayedCount = redis.call("ZCARD", ns .. ":delayed")
-  if delayedCount > 0 then
-    return 0
+  -- Check delayed jobs (仅当不忽略时检查)
+  if ignoreDelayed ~= "1" then
+    local delayedCount = redis.call("ZCARD", ns .. ":delayed")
+    if delayedCount > 0 then
+      return 0
+    end
   end
 
-  -- Check staged jobs (Phase 2 新增)
-  local stagedCount = redis.call("ZCARD", ns .. ":stage")
-  if stagedCount > 0 then
-    return 0
+  -- Check staged jobs (仅当不忽略时检查)
+  if ignoreStaged ~= "1" then
+    local stagedCount = redis.call("ZCARD", ns .. ":stage")
+    if stagedCount > 0 then
+      return 0
+    end
   end
 
   -- Check ready groups
