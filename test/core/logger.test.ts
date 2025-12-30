@@ -1,10 +1,10 @@
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import winston from 'winston';
-import { Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 
-describe('logger', () => {
+describe('日志记录器 (logger)', () => {
   const redis = createRedis();
   const namespace = `test:q1:${Date.now()}`;
 
@@ -18,7 +18,7 @@ describe('logger', () => {
     await redis.quit();
   });
 
-  it('pino', () => {
+  it('应当支持 pino 日志记录器 (pino)', () => {
     const logger = pino();
     const q = new Queue({ redis, namespace, jobTimeoutMs: 5000 });
     const worker = new Worker({
@@ -31,7 +31,7 @@ describe('logger', () => {
     worker.run();
   });
 
-  it('winston', () => {
+  it('应当支持 winston 日志记录器 (winston)', () => {
     const logger = winston.createLogger();
     const q = new Queue({ redis, namespace, jobTimeoutMs: 5000 });
     const worker = new Worker({

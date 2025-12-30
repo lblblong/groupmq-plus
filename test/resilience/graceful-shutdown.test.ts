@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { getWorkersStatus, Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { getWorkersStatus, Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 
-describe('Graceful Shutdown Tests', () => {
+describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
   const namespace = `test:graceful:${Date.now()}`;
 
   afterAll(async () => {
@@ -13,7 +13,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should track active job count correctly', async () => {
+  it('应当正确追踪活跃任务计数 (should track active job count correctly)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:count` });
 
@@ -67,7 +67,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should wait for queue to empty', async () => {
+  it('应当等待队列变空 (should wait for queue to empty)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:empty` });
 
@@ -115,7 +115,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should track current job in worker', async () => {
+  it('应当追踪 worker 中的当前任务 (should track current job in worker)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:current` });
 
@@ -171,7 +171,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should stop worker gracefully', async () => {
+  it('应当优雅地停止 worker (should stop worker gracefully)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:graceful` });
 
@@ -211,7 +211,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should timeout graceful stop if job takes too long', async () => {
+  it('如果任务耗时过长，应当超时优雅停止 (should timeout graceful stop if job takes too long)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:timeout` });
 
@@ -259,7 +259,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   });
 
-  it('should get workers status correctly', async () => {
+  it('应当正确获取 worker 状态 (should get workers status correctly)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:status` });
 
@@ -353,7 +353,7 @@ describe('Graceful Shutdown Tests', () => {
 
   // NEW TESTS REQUESTED BY USER
 
-  it('should finish long-running job before stopping worker (graceful shutdown)', async () => {
+  it('应当在停止前完成长时间运行的任务 (should finish long-running job before stopping worker (graceful shutdown))', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:longrunning` });
 
@@ -420,7 +420,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   }, 8000); // 8 second timeout for the test (reduced)
 
-  it('should not pick up new jobs after shutdown is initiated', async () => {
+  it('关闭后不应该选择新任务 (should not pick up new jobs after shutdown is initiated)', async () => {
     const redis = createRedis();
     const queue = new Queue({ redis, namespace: `${namespace}:nonewjobs` });
 
@@ -484,7 +484,7 @@ describe('Graceful Shutdown Tests', () => {
     await redis.quit();
   }, 10000); // 10 second timeout for the test
 
-  it('should shutdown gracefully', async () => {
+  it('应当优雅地关闭 (should shutdown gracefully)', async () => {
     const redis = createRedis();
     const queue = new Queue({
       redis,

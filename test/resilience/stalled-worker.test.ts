@@ -1,9 +1,134 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Queue } from '../src/queue';
-import { Worker } from '../src/worker';
-import { createRedis } from './helpers/redis';
+import { Queue } from '../../src/queue';
+import { Worker } from '../../src/worker';
+import { createRedis } from '../helpers/redis';
 
-describe('Worker Blocking Detection Tests', () => {
+describe('任务卡顿恢复 (Stalled Job Recovery)', () => {
+  let redis: any;
+  let queue: Queue;
+  let workers: Worker[] = [];
+  let namespace: string;
+
+  beforeEach(async () => {
+    namespace = `test-stalled-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    redis = createRedis();
+
+    const keys = await redis.keys(`groupmq:${namespace}:*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+
+    queue = new Queue({
+      redis: redis.duplicate(),
+      namespace,
+      jobTimeoutMs: 5000,
+    });
+  });
+
+  afterEach(async () => {
+    await Promise.all(workers.map((w) => w.close(0)));
+    workers = [];
+
+    const keys = await redis.keys(`groupmq:${namespace}:*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+
+    await queue.close();
+    await redis.quit();
+  });
+
+  it('应当支持卡顿任务检测配置 (should support stalled job detection configuration)', () => {
+    // This test documents the API and configuration options
+    const worker = new Worker({
+      queue: queue,
+      handler: async (job) => {
+        return { processed: job.data };
+      },
+      stalledInterval: 30000, // Check every 30 seconds
+      maxStalledCount: 1, // Fail after 1 stall
+      stalledGracePeriod: 0, // No grace period
+    });
+
+    // Event handler for stalled jobs
+    worker.on('stalled', (jobId, groupId) => {
+      console.log(`Job ${jobId} from group ${groupId} was stalled`);
+    });
+
+    workers.push(worker);
+
+    expect(worker).toBeDefined();
+  });
+
+  it('应当不干扰正常完成的任务 (should not interfere with normally completing jobs)', async () => {
+    const completedJobs: any[] = [];
+    const stalledEvents: any[] = [];
+
+    // Add multiple jobs
+    for (let i = 0; i < 5; i++) {
+      await queue.add({
+        groupId: `group-${i}`,
+        data: { id: i },
+      });
+    }
+
+    const worker = new Worker({
+      queue: queue,
+      handler: async (job) => {
+        // Normal job processing - completes quickly
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return { processed: job.data };
+      },
+      stalledInterval: 200, // Check frequently
+      maxStalledCount: 1,
+    });
+
+    worker.on('completed', (job) => {
+      completedJobs.push(job);
+    });
+
+    worker.on('stalled', (jobId, groupId) => {
+      stalledEvents.push({ jobId, groupId });
+    });
+
+    workers.push(worker);
+
+    worker.run().catch(() => {});
+
+    // Wait for all jobs to complete
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // All jobs should complete normally
+    expect(completedJobs.length).toBe(5);
+
+    // No stalled events should be emitted for normally completing jobs
+    expect(stalledEvents.length).toBe(0);
+
+    // No jobs should be in active state
+    const activeCount = await queue.getActiveCount();
+    expect(activeCount).toBe(0);
+  });
+
+  it('应当暴露 queue.checkStalledJobs 方法用于手动检查 (should expose queue.checkStalledJobs method for manual checking)', async () => {
+    // This documents the manual checking API
+    const now = Date.now();
+    const gracePeriod = 1000;
+    const maxStalledCount = 1;
+
+    // The method exists and can be called
+    const results = await queue.checkStalledJobs(
+      now,
+      gracePeriod,
+      maxStalledCount,
+    );
+
+    // Returns an array (empty if no stalled jobs)
+    expect(Array.isArray(results)).toBe(true);
+  });
+});
+
+describe('Worker 事件循环阻塞 (Worker Event Loop Blocking)', () => {
   let redis: any;
   let queue: Queue;
   let workers: Worker[] = [];
@@ -42,7 +167,7 @@ describe('Worker Blocking Detection Tests', () => {
     await redis.quit();
   });
 
-  it('should detect worker blocking with many groups and few workers', async () => {
+  it('应当检测具有许多组和少数 worker 的阻塞 (should detect worker blocking with many groups and few workers)', async () => {
     // Create 8 workers
     const workerCount = 8;
     const groupCount = 100; // Many more groups than workers
@@ -132,7 +257,7 @@ describe('Worker Blocking Detection Tests', () => {
     }
   }, 30000); // 30 second timeout for the test
 
-  it('should handle Redis connection issues gracefully', async () => {
+  it('应当优雅地处理 Redis 连接问题 (should handle Redis connection issues gracefully)', async () => {
     // Create a worker
     const worker = new Worker({
       queue: queue,
@@ -166,7 +291,7 @@ describe('Worker Blocking Detection Tests', () => {
     expect(metrics.totalJobsProcessed).toBeGreaterThan(0);
   }, 15000);
 
-  it('should detect stuck workers with comprehensive logging', async () => {
+  it('应当检测卡顿的 worker 并输出详细日志 (should detect stuck workers with comprehensive logging)', async () => {
     // Create a worker that will get "stuck" (simulate by adding jobs it can't process)
     const worker = new Worker({
       queue: queue,

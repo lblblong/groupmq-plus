@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 
-describe('Stress and Performance Degradation Tests', () => {
+describe('压力与性能下降测试 (Stress and Performance Degradation Tests)', () => {
   const namespace = `test:stress:${Date.now()}`;
 
   afterAll(async () => {
@@ -12,7 +12,7 @@ describe('Stress and Performance Degradation Tests', () => {
     await redis.quit();
   });
 
-  it('should handle sustained high throughput over time', async () => {
+  it('应当处理持续高吞吐量 (should handle sustained high throughput over time)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:sustained` });
 
@@ -86,7 +86,7 @@ describe('Stress and Performance Degradation Tests', () => {
     await redis.quit();
   }, 30000); // 30 second timeout
 
-  it('should handle memory pressure with many pending jobs', async () => {
+  it('应当处理许多待处理任务的内存压力 (should handle memory pressure with many pending jobs)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:pending` });
 
@@ -145,7 +145,7 @@ describe('Stress and Performance Degradation Tests', () => {
     await redis.quit();
   }, 60000); // 60 second timeout
 
-  it('should handle worker churn (workers starting and stopping)', async () => {
+  it('应当处理 worker 变动（启动和停止）(should handle worker churn (workers starting and stopping))', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -222,7 +222,7 @@ describe('Stress and Performance Degradation Tests', () => {
     // await redis.quit();
   }, 30000);
 
-  it('should handle burst traffic patterns', async () => {
+  it('应当处理突发流量模式 (should handle burst traffic patterns)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:burst` });
 
@@ -291,7 +291,7 @@ describe('Stress and Performance Degradation Tests', () => {
     await redis.quit();
   }, 60000); // Increased timeout for burst processing
 
-  it('should handle gradual resource exhaustion gracefully', async () => {
+  it('应当优雅地处理渐进式资源耗尽 (should handle gradual resource exhaustion gracefully)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:exhaustion` });
 
@@ -360,7 +360,7 @@ describe('Stress and Performance Degradation Tests', () => {
     await redis.quit();
   }, 30000);
 
-  it('should maintain performance with large number of groups', async () => {
+  it('应当使用大量组维持性能 (should maintain performance with large number of groups)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:groups` });
 

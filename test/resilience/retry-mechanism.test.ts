@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker, UnrecoverableError } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker, UnrecoverableError } from '../../src';
+import { createRedis } from '../helpers/redis';
 
-describe('Retry Behavior Tests', () => {
+describe('重试行为测试 (Retry Behavior Tests)', () => {
   const namespace = `test:retry:${Date.now()}`;
 
   afterAll(async () => {
@@ -13,7 +13,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should respect maxAttempts and move to dead letter queue', async () => {
+  it('应当尊重 maxAttempts 并移动到死信队列 (should respect maxAttempts and move to dead letter queue)', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -56,7 +56,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should use exponential backoff correctly', async () => {
+  it('应当正确使用指数退避 (should use exponential backoff correctly)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:backoff` });
 
@@ -105,7 +105,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should handle mixed success/failure in same group', async () => {
+  it('应当处理同一组中的混合成功/失败 (should handle mixed success/failure in same group)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:mixed` });
 
@@ -154,7 +154,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should handle retry with different error types', async () => {
+  it('应当处理不同错误类型的重试 (should handle retry with different error types)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:errors` });
 
@@ -209,7 +209,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should maintain FIFO order during retries with multiple groups', async () => {
+  it('应当在具有多个组的重试期间维持 FIFO 顺序 (should maintain FIFO order during retries with multiple groups)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:multigroup` });
 
@@ -275,7 +275,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should immediately fail when UnrecoverableError is thrown', async () => {
+  it('应当在抛出 UnrecoverableError 时立即失败 (should immediately fail when UnrecoverableError is thrown)', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -313,7 +313,7 @@ describe('Retry Behavior Tests', () => {
     await redis.quit();
   });
 
-  it('should support smart backoff based on error type', async () => {
+  it('应当支持基于错误类型的智能退避 (should support smart backoff based on error type)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:smart-backoff` });
 

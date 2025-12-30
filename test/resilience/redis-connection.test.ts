@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 import { Redis } from 'ioredis';
 
-describe('Redis Disconnect/Reconnect Tests', () => {
+describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)', () => {
   const namespace = `test:disconnect:${Date.now()}`;
 
   afterAll(async () => {
@@ -14,7 +14,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis.quit();
   });
 
-  it('should handle Redis connection drops gracefully', async () => {
+  it('应当优雅地处理 Redis 连接丢失 (should handle Redis connection drops gracefully)', async () => {
     const redis = createRedis({
       lazyConnect: true,
       maxRetriesPerRequest: 3,
@@ -67,7 +67,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis.quit();
   });
 
-  it('should recover from Redis server restart simulation', async () => {
+  it('应当从 Redis 服务器重启模拟中恢复 (should recover from Redis server restart simulation)', async () => {
     const redis = createRedis({
       connectTimeout: 1000,
       enableReadyCheck: true,
@@ -113,7 +113,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis.quit();
   });
 
-  it('should handle network partitions and blocking operations', async () => {
+  it('应当处理网络分区和阻塞操作 (should handle network partitions and blocking operations)', async () => {
     const redis = createRedis({
       connectTimeout: 1000,
       commandTimeout: 2000,
@@ -176,7 +176,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis2.quit();
   });
 
-  it('should maintain job state consistency during Redis failures', async () => {
+  it('应当在 Redis 故障期间保持任务状态一致性 (should maintain job state consistency during Redis failures)', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -220,7 +220,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     await redis.quit();
   });
 
-  it('should handle Redis memory pressure and connection limits', async () => {
+  it('应当处理 Redis 内存压力和连接限制 (should handle Redis memory pressure and connection limits)', async () => {
     const connections: Redis[] = [];
 
     try {
@@ -282,7 +282,7 @@ describe('Redis Disconnect/Reconnect Tests', () => {
     }
   });
 
-  it('should handle Redis AUTH failures gracefully', async () => {
+  it('应当优雅地处理 Redis AUTH 故障 (should handle Redis AUTH failures gracefully)', async () => {
     // This test assumes Redis is running without AUTH
     // In a real scenario, you'd test with wrong credentials
     const redis = createRedis({

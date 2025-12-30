@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Queue, Worker, RoundRobinStrategy } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker, RoundRobinStrategy } from '../../../src';
+import { createRedis } from '../../helpers/redis';
 
 describe('RoundRobinStrategy', () => {
   const redis = createRedis();

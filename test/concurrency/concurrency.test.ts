@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 
 describe('Concurrency and Race Condition Tests', () => {
   const namespace = `test:concurrency:${Date.now()}`;

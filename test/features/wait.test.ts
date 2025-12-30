@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
-import { cleanupRedis, createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import { cleanupRedis, createRedis } from '../helpers/redis';
 
-describe('waitUntilFinished', () => {
-  it('resolves when a job completes', async () => {
+describe('等待直到完成功能 (waitUntilFinished)', () => {
+  it('任务完成时应当解决 (resolves when a job completes)', async () => {
     const redis = createRedis();
     const q = new Queue<{ value: number }>({
       redis,
@@ -27,7 +27,7 @@ describe('waitUntilFinished', () => {
     await cleanupRedis(q.namespace);
   });
 
-  it('rejects when a job fails', async () => {
+  it('任务失败时应当拒绝 (rejects when a job fails)', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -53,7 +53,7 @@ describe('waitUntilFinished', () => {
     await cleanupRedis(q.namespace);
   });
 
-  it('resolves multiple concurrent waiters for the same job', async () => {
+  it('应当解决同一任务的多个并发等待者 (resolves multiple concurrent waiters for the same job)', async () => {
     const redis = createRedis();
     const q = new Queue({
       redis,

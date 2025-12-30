@@ -1,8 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Job, Queue, Worker } from '../src';
-import { createRedis } from './helpers/redis';
+import { afterAll, afterEach, beforeEach, describe, expect, it, test } from 'vitest';
+import { Job, Queue, Worker } from '../../src';
+import { createRedis } from '../helpers/redis';
 
-describe('Edge Cases and Error Handling Tests', () => {
+describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
   const namespace = `test:edge:${Date.now()}`;
 
   afterAll(async () => {
@@ -12,7 +12,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle empty payloads and null values', async () => {
+  it('应当处理空载荷和空值 (should handle empty payloads and null values)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:empty` });
 
@@ -60,7 +60,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle extremely large payloads', async () => {
+  it('应当处理极大的载荷 (should handle extremely large payloads)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:large` });
 
@@ -107,7 +107,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle special characters and unicode in payloads', async () => {
+  it('应当处理载荷中的特殊字符和 Unicode (should handle special characters and unicode in payloads)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:unicode` });
 
@@ -165,7 +165,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle malformed or corrupted data gracefully', async () => {
+  it('应当优雅地处理格式错误或损坏的数据 (should handle malformed or corrupted data gracefully)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:corrupted` });
 
@@ -218,7 +218,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle extremely long group IDs and job IDs', async () => {
+  it('应当处理极长的组 ID 和任务 ID (should handle extremely long group IDs and job IDs)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:long` });
 
@@ -256,7 +256,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle rapid worker start/stop cycles', async () => {
+  it('应当处理快速 worker 启动/停止循环 (should handle rapid worker start/stop cycles)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:rapid` });
 
@@ -310,7 +310,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle clock skew and time-based edge cases', async () => {
+  it('应当处理时钟偏斜和基于时间的边缘情况 (should handle clock skew and time-based edge cases)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:time` });
 
@@ -353,7 +353,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle circular references in payloads', async () => {
+  it('应当处理载荷中的循环引用 (should handle circular references in payloads)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:circular` });
 
@@ -377,7 +377,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle zero and negative visibility timeouts', async () => {
+  it('应当处理零和负的可见性超时 (should handle zero and negative visibility timeouts)', async () => {
     const redis = createRedis();
 
     // Test with zero visibility timeout
@@ -407,7 +407,7 @@ describe('Edge Cases and Error Handling Tests', () => {
     await redis.quit();
   });
 
-  it('should handle queue operations on disconnected Redis', async () => {
+  it('应当处理断开连接的 Redis 上的队列操作 (should handle queue operations on disconnected Redis)', async () => {
     const redis = createRedis();
     const q = new Queue({ redis, namespace: `${namespace}:disconnected` });
 
@@ -444,6 +444,107 @@ describe('Edge Cases and Error Handling Tests', () => {
     expect(job).not.toBeNull();
 
     await redis.quit();
+  });
+});
+
+describe('损坏的 Redis 数据恢复 (Corrupted Redis Data Recovery)', () => {
+  let queue: Queue;
+  let redis: any;
+
+  beforeEach(async () => {
+    redis = createRedis();
+    const ns = `test:corrupted:${Date.now()}`;
+    queue = new Queue({
+      redis,
+      namespace: ns,
+      jobTimeoutMs: 5000,
+    });
+  });
+
+  afterEach(async () => {
+    await queue.close();
+    // Don't quit redis separately - queue owns it and closes it
+  });
+
+  test('应当优雅地处理缺失的任务哈希而不出现连接错误 (should handle missing job hash gracefully without concatenation error)', async () => {
+    const groupId = 'test-group';
+    const fakeJobId = 'fake-job-id-12345';
+
+    // Manually create a corrupted state: job ID in group sorted set but no job hash
+    const gZ = `${queue.namespace}:g:${groupId}`;
+    const readyKey = `${queue.namespace}:ready`;
+
+    // Add job ID to group sorted set
+    await redis.zadd(gZ, 1000, fakeJobId);
+
+    // Add group to ready queue
+    await redis.zadd(readyKey, 1000, groupId);
+
+    // Try to reserve - should not crash with "attempt to concatenate" error
+    let errorOccurred = false;
+    let concatenationError = false;
+
+    try {
+      // This should handle the missing job hash gracefully
+      const result = await queue['reserve']();
+      // Result should be null since job hash doesn't exist
+      expect(result).toBeNull();
+    } catch (error: any) {
+      errorOccurred = true;
+      if (error.message && error.message.includes('attempt to concatenate')) {
+        concatenationError = true;
+      }
+    }
+
+    // The critical assertion: no concatenation error should occur
+    expect(concatenationError).toBe(false);
+
+    // Verify queue is still functional after handling corruption
+    const validJobId = await queue.add({ groupId, data: { test: 'valid' } });
+    expect(validJobId).toBeTruthy();
+
+    // Should be able to reserve the valid job
+    const validJob = await queue['reserve']();
+    expect(validJob).not.toBeNull();
+    // validJobId is a string, validJob is an object with id property
+    expect(typeof validJob?.id).toBe('string');
+    expect(validJob?.groupId).toBe(groupId);
+  });
+
+  test('应当在 reserveAtomic 中处理缺失的任务哈希 (should handle missing job hash in reserveAtomic)', async () => {
+    const groupId = 'atomic-group';
+    const fakeJobId = 'fake-atomic-job';
+
+    // Create corrupted state
+    const gZ = `${queue.namespace}:g:${groupId}`;
+    await redis.zadd(gZ, 1000, fakeJobId);
+
+    // Add to ready queue
+    const readyKey = `${queue.namespace}:ready`;
+    await redis.zadd(readyKey, 1000, groupId);
+
+    let concatenationError = false;
+
+    try {
+      // Should handle gracefully
+      const result = await queue['reserveAtomic'](groupId);
+      // Should return empty status
+      expect(result.status).toBe('empty');
+    } catch (error: any) {
+      if (error.message && error.message.includes('attempt to concatenate')) {
+        concatenationError = true;
+      }
+    }
+
+    expect(concatenationError).toBe(false);
+
+    // Verify queue still works
+    await queue.add({ groupId, data: { test: 'valid' } });
+    const result = await queue['reserveAtomic'](groupId);
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.job.groupId).toBe(groupId);
+    }
   });
 });
 

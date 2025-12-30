@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../src';
-import type { LoggerInterface } from '../src/logger';
-import { createRedis } from './helpers/redis';
+import { Queue, Worker } from '../../src';
+import type { LoggerInterface } from '../../src/logger';
+import { createRedis } from '../helpers/redis';
 
 /**
  * Test logger that captures race condition warnings for testing
