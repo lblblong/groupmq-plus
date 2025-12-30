@@ -1,4 +1,4 @@
---- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/group-lifecycle/cleanup-if-group-empty"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/delayed-handling/promote-delayed-job-complete"
 
@@ -51,23 +51,9 @@ if newDelayUntil > 0 and newDelayUntil > now then
   redis.call("HSET", jobKey, "status", "delayed")
   redis.call("ZADD", delayedKey, newDelayUntil, jobId)
   redis.call("ZREM", gZ, jobId)
-  
-  -- Update group status in ready/limited
-  local jobCount = redis.call("ZCARD", gZ)
-  if jobCount == 0 then
-    redis.call("ZREM", readyKey, groupId)
-    redis.call("ZREM", limitedKey, groupId)
-  else
-    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-    if head and #head >= 2 then
-      local headScore = tonumber(head[2])
-      if redis.call("ZSCORE", readyKey, groupId) then
-        redis.call("ZADD", readyKey, headScore, groupId)
-      elseif redis.call("ZSCORE", limitedKey, groupId) then
-        redis.call("ZADD", limitedKey, headScore, groupId)
-      end
-    end
-  end
+
+  -- Use centralized cleanup module to handle group state
+  cleanupIfGroupEmpty(ns, groupId)
 else
   -- Job should be ready immediately: promote using standard function
   promoteDelayedJobToWaiting(ns, jobId, delayedKey, readyKey, limitedKey)

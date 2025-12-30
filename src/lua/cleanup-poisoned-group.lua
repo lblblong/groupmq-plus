@@ -1,3 +1,5 @@
+--- @include "includes/group-analysis/analyze-group-poisoning"
+
 -- argv: ns, groupId, now
 local ns = KEYS[1]
 local groupId = ARGV[1]
@@ -24,20 +26,9 @@ if lockValue then
   end
 end
 
--- Check if all jobs in the group have exceeded max attempts
-local jobs = redis.call("ZRANGE", gZ, 0, -1)
-local reservableJobs = 0
-for i = 1, #jobs do
-  local jobId = jobs[i]
-  local jobKey = ns .. ":job:" .. jobId
-  local attempts = tonumber(redis.call("HGET", jobKey, "attempts"))
-  local maxAttempts = tonumber(redis.call("HGET", jobKey, "maxAttempts"))
-  if attempts and maxAttempts and attempts < maxAttempts then
-    reservableJobs = reservableJobs + 1
-  end
-end
-
-if reservableJobs == 0 then
+-- Check if group is poisoned using centralized analysis module
+local isPoisoned = analyzeGroupPoisoning(ns, groupId)
+if isPoisoned then
   redis.call("ZREM", readyKey, groupId)
   redis.call("ZREM", limitedKey, groupId)
   return "poisoned"
