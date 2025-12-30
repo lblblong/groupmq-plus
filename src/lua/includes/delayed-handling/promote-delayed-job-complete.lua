@@ -1,11 +1,27 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/concurrency-control/is-group-at-capacity"
 
--- 入参: ns, jobId, delayedKey, readyKey, limitedKey
--- 功能: 从延迟集合移动到群组等待集合，更新群组状态
--- 返回: "not-found" | "invalid-data" | "promoted"
+--[[
+  将延迟任务晋升到等待队列 (Promote Delayed Job to Waiting)
+  
+  @param options table 参数对象
+    - ns: string 命名空间
+    - jobId: string 任务ID
+    - delayedKey: string 延迟集合的 Redis key
+    - readyKey: string 就绪集合的 Redis key
+    - limitedKey: string 限流集合的 Redis key
+  
+  @return string "not-found" | "invalid-data" | "promoted"
+]]
 
-local function promoteDelayedJobToWaiting(ns, jobId, delayedKey, readyKey, limitedKey)
+local function promoteDelayedJobToWaiting(options)
+  -- 参数解构
+  local ns = options.ns
+  local jobId = options.jobId
+  local delayedKey = options.delayedKey
+  local readyKey = options.readyKey
+  local limitedKey = options.limitedKey
+
   local jobKey = ns .. ":job:" .. jobId
 
   -- 基本验证

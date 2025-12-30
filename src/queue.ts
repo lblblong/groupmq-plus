@@ -2051,21 +2051,21 @@ export class Queue<T = any> {
    * Get the number of jobs currently being processed (active jobs)
    */
   async getActiveCount(): Promise<number> {
-    return evalScript<number>(this.r, 'get-active-count', [this.ns], 1)
+    return evalScript<number>(this.r, 'get-queue-metrics', [this.ns, 'active'], 1)
   }
 
   /**
    * Get the number of jobs waiting to be processed
    */
   async getWaitingCount(): Promise<number> {
-    return evalScript<number>(this.r, 'get-waiting-count', [this.ns], 1)
+    return evalScript<number>(this.r, 'get-queue-metrics', [this.ns, 'waiting'], 1)
   }
 
   /**
    * Get the number of jobs delayed due to backoff
    */
   async getDelayedCount(): Promise<number> {
-    return evalScript<number>(this.r, 'get-delayed-count', [this.ns], 1)
+    return evalScript<number>(this.r, 'get-queue-metrics', [this.ns, 'delayed'], 1)
   }
 
   /**
@@ -2099,24 +2099,33 @@ export class Queue<T = any> {
   }
 
   /**
+   * Get core queue metrics (active, waiting, delayed) in a single Redis call
+   * More efficient than calling getActiveCount, getWaitingCount, getDelayedCount separately
+   */
+  async getQueueMetrics(): Promise<{ active: number; waiting: number; delayed: number }> {
+    const result = await evalScript<string>(this.r, 'get-queue-metrics', [this.ns], 1)
+    return JSON.parse(result)
+  }
+
+  /**
    * Get list of active job IDs
    */
   async getActiveJobs(): Promise<string[]> {
-    return evalScript<string[]>(this.r, 'get-active-jobs', [this.ns], 1)
+    return evalScript<string[]>(this.r, 'get-jobs', [this.ns, 'active'], 1)
   }
 
   /**
    * Get list of waiting job IDs
    */
   async getWaitingJobs(): Promise<string[]> {
-    return evalScript<string[]>(this.r, 'get-waiting-jobs', [this.ns], 1)
+    return evalScript<string[]>(this.r, 'get-jobs', [this.ns, 'waiting'], 1)
   }
 
   /**
    * Get list of delayed job IDs
    */
   async getDelayedJobs(): Promise<string[]> {
-    return evalScript<string[]>(this.r, 'get-delayed-jobs', [this.ns], 1)
+    return evalScript<string[]>(this.r, 'get-jobs', [this.ns, 'delayed'], 1)
   }
 
   /**
