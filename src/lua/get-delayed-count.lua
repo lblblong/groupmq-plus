@@ -1,5 +1,8 @@
+--- @include "includes/dal/read-zset"
+
+-- Get count of delayed jobs
 local ns = KEYS[1]
 local delayedKey = ns .. ":delayed"
-return redis.call("ZCARD", delayedKey)
+return readZset(delayedKey, 'count')
 
 

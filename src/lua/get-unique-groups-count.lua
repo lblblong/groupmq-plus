@@ -1,4 +1,7 @@
+--- @include "includes/dal/read-set"
+
+-- Get count of unique groups
 -- argv: ns
 local ns = KEYS[1]
 local groupsKey = ns .. ":groups"
-return redis.call("SCARD", groupsKey)
+return readSet(groupsKey, 'count')

@@ -1,6 +1,9 @@
+--- @include "includes/dal/read-zset"
+
+-- Get list of active (processing) jobs
 -- argv: ns
 local ns = KEYS[1]
 local processingKey = ns .. ":processing"
-return redis.call("ZRANGE", processingKey, 0, -1)
+return readZset(processingKey, 'range')
 
 
