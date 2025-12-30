@@ -1,13 +1,13 @@
---- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/stalled-recovery/try-trigger-stalled-check"
 
 -- argv: ns, nowEpochMs, vtMs, maxBatch, tokenBase
 local ns = KEYS[1]
 local now = tonumber(ARGV[1])
 local vt = tonumber(ARGV[2])
 local maxBatch = tonumber(ARGV[3]) or 16
-local tokenBase = ARGV[4] -- [NEW] Unique UUID base for this batch request
+local tokenBase = ARGV[4]
 
 local readyKey = ns .. ":ready"
 local processingKey = ns .. ":processing"
@@ -20,72 +20,8 @@ end
 
 local out = {}
 
--- STALLED JOB RECOVERY WITH THROTTLING
--- Check for stalled jobs periodically to avoid overhead in hot path
--- This ensures stalled jobs are recovered even in high-load systems where ready queue is never empty
--- Check interval is adaptive: 1/4 of jobTimeout (to check 4x during visibility window), max 5s
-local stalledCheckKey = ns .. ":stalled:lastcheck"
-local lastCheck = tonumber(redis.call("GET", stalledCheckKey)) or 0
-local stalledCheckInterval = math.min(math.floor(vt / 4), 5000)
-
-if (now - lastCheck) >= stalledCheckInterval then
-  -- Update last check timestamp
-  redis.call("SET", stalledCheckKey, tostring(now))
-  
-  -- Check for expired jobs and recover them
-  local expiredJobs = redis.call("ZRANGEBYSCORE", processingKey, 0, now)
-  if #expiredJobs > 0 then
-    for _, jobId in ipairs(expiredJobs) do
-      local procKey = ns .. ":processing:" .. jobId
-      local procData = redis.call("HMGET", procKey, "groupId", "deadlineAt")
-      local gid = procData[1]
-      local deadlineAt = tonumber(procData[2])
-      if gid and deadlineAt and now > deadlineAt then
-        local jobKey = ns .. ":job:" .. jobId
-        local jobData = redis.call("HMGET", jobKey, "score", "delayUntil")
-        local jobScore = tonumber(jobData[1])
-        local delayUntil = tonumber(jobData[2] or "0")
-        
-        if jobScore then
-          local gZ = ns .. ":g:" .. gid
-          
-          if delayUntil > 0 and delayUntil > now then
-            -- [PHYSICAL SEPARATION] Job is still delayed, add to delayed set ONLY
-            redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
-            redis.call("HSET", jobKey, "status", "delayed")
-            
-            -- Update group status in ready/limited (it might have been the head)
-            local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-            if head and #head >= 2 then
-              local headScore = tonumber(head[2])
-              if redis.call("ZSCORE", readyKey, gid) then
-                redis.call("ZADD", readyKey, headScore, gid)
-              elseif redis.call("ZSCORE", limitedKey, gid) then
-                redis.call("ZADD", limitedKey, headScore, gid)
-              end
-            end
-          else
-            -- Recover to waiting state
-            redis.call("ZADD", gZ, jobScore, jobId)
-            redis.call("HSET", jobKey, "status", "waiting")
-
-            local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-            if head and #head >= 2 then
-              local headScore = tonumber(head[2])
-              -- [LIMITED GROUP SET] Check group capacity after stalled recovery
-              updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, headScore)
-            end
-          end
-          -- [FIX] Remove from active list to prevent ghost concurrency
-          redis.call("LREM", ns .. ":g:" .. gid .. ":active", 1, jobId)
-          redis.call("DEL", ns .. ":lock:" .. gid)
-          redis.call("DEL", procKey)
-          redis.call("ZREM", processingKey, jobId)
-        end
-      end
-    end
-  end
-end
+-- Try to trigger stalled check (throttled)
+tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, processingKey)
 
 -- Pop up to maxBatch groups from ready set (lowest score first)
 local groups = redis.call("ZRANGE", readyKey, 0, maxBatch - 1, "WITHSCORES")
