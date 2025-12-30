@@ -1,17 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
-import { cleanupRedis, createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
 
 describe('等待直到完成功能 (waitUntilFinished)', () => {
-  it('任务完成时应当解决 (resolves when a job completes)', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ value: number }>({
-      redis,
-      namespace: `test:wait-complete:${Date.now()}`,
-      keepCompleted: 1,
-    });
+  test('任务完成时应当解决 (resolves when a job completes)', async ({ createQueue, createWorker }) => {
+    const q = createQueue<{ value: number }>({ keepCompleted: 1 });
 
-    const worker = new Worker<{ value: number }>({
+    const worker = createWorker<{ value: number }>({
       queue: q,
       handler: async (job) => job.data.value * 2,
     });
@@ -21,22 +14,15 @@ describe('等待直到完成功能 (waitUntilFinished)', () => {
 
     const result = await job.waitUntilFinished(2000);
     expect(result).toBe(42);
-
-    await worker.close();
-    await q.close();
-    await cleanupRedis(q.namespace);
   });
 
-  it('任务失败时应当拒绝 (rejects when a job fails)', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `test:wait-fail:${Date.now()}`,
+  test('任务失败时应当拒绝 (rejects when a job fails)', async ({ createQueue, createWorker }) => {
+    const q = createQueue({
       keepFailed: 1,
       maxAttempts: 1,
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       handler: async () => {
         throw new Error('boom');
@@ -47,21 +33,12 @@ describe('等待直到完成功能 (waitUntilFinished)', () => {
     const job = await q.add({ groupId: 'g1', data: { value: 1 } });
 
     await expect(job.waitUntilFinished(5000)).rejects.toThrow('boom');
-
-    await worker.close();
-    await q.close();
-    await cleanupRedis(q.namespace);
   });
 
-  it('应当解决同一任务的多个并发等待者 (resolves multiple concurrent waiters for the same job)', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `test:wait-multi:${Date.now()}`,
-      keepCompleted: 1,
-    });
+  test('应当解决同一任务的多个并发等待者 (resolves multiple concurrent waiters for the same job)', async ({ createQueue, createWorker }) => {
+    const q = createQueue({ keepCompleted: 1 });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       handler: async () => 'ok',
     });
@@ -75,9 +52,5 @@ describe('等待直到完成功能 (waitUntilFinished)', () => {
     const [result1, result2] = await Promise.all([waiter1, waiter2]);
     expect(result1).toBe('ok');
     expect(result2).toBe('ok');
-
-    await worker.close();
-    await q.close();
-    await cleanupRedis(q.namespace);
   });
 });

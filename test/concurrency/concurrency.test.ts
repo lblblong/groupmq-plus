@@ -1,79 +1,54 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
 
 describe('Concurrency and Race Condition Tests', () => {
-  const namespace = `test:concurrency:${Date.now()}`;
-
-  afterAll(async () => {
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('should handle multiple workers distributing across different groups with atomic completion', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:atomic-distribution`,
-    });
+  test('should handle multiple workers distributing across different groups with atomic completion', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     // Add 10 jobs to one group (should be processed by one worker)
     for (let i = 0; i < 10; i++) {
       await q.add({
-        groupId: 'group-heavy', // Heavy group with 10 jobs
+        groupId: 'group-heavy',
         data: { id: i, group: 'heavy' },
       });
     }
 
     // Add 1 job to another group (should be processed by the other worker)
     await q.add({
-      groupId: 'group-light', // Light group with 1 job
+      groupId: 'group-light',
       data: { id: 10, group: 'light' },
     });
 
     const processed: any[] = [];
-    const workers: Worker<any>[] = [];
-    const processedBy: { [key: number]: any[] } = {}; // Track which worker processed which jobs
+    const processedBy: { [key: number]: any[] } = {};
 
     // Create 2 workers
     for (let workerId = 0; workerId < 2; workerId++) {
-      const worker = new Worker({
+      const worker = createWorker({
         queue: q,
         blockingTimeoutSec: 1,
-        concurrency: 1, // Single concurrency to make chaining more obvious
+        concurrency: 1,
         handler: async (job) => {
           const jobData = job.data as any;
           processed.push(jobData);
           if (!processedBy[workerId]) processedBy[workerId] = [];
           processedBy[workerId].push(jobData);
-
-          // Short processing time
           await new Promise((resolve) => setTimeout(resolve, 50));
         },
       });
-      workers.push(worker);
       worker.run();
     }
 
-    // Wait for all jobs to be processed
     await q.waitForEmpty();
 
-    // All jobs should be processed exactly once
     expect(processed.length).toBe(11);
-    expect(new Set(processed.map((j) => j.id)).size).toBe(11); // No duplicates
+    expect(new Set(processed.map((j) => j.id)).size).toBe(11);
 
-    // Verify atomic completion behavior:
-    // - One worker should process all 10 jobs from group-heavy
-    // - The other worker should process the 1 job from group-light
     const heavyGroupJobs = processed.filter((j) => j.group === 'heavy');
     const lightGroupJobs = processed.filter((j) => j.group === 'light');
 
     expect(heavyGroupJobs.length).toBe(10);
     expect(lightGroupJobs.length).toBe(1);
 
-    // Check that jobs within each group were processed by the same worker
     const heavyWorkerIds = new Set(
       heavyGroupJobs.map((j) => {
         for (const [workerId, jobs] of Object.entries(processedBy)) {
@@ -92,33 +67,25 @@ describe('Concurrency and Race Condition Tests', () => {
       }),
     );
 
-    // Each group should be processed by exactly one worker
     expect(heavyWorkerIds.size).toBe(1);
     expect(lightWorkerIds.size).toBe(1);
-
-    // The workers should be different (distribution across groups)
     expect(heavyWorkerIds).not.toEqual(lightWorkerIds);
 
-    // Verify that all 10 heavy jobs were processed by the same worker
     const heavyWorkerId = Array.from(heavyWorkerIds)[0];
     const heavyWorkerJobs = processedBy[heavyWorkerId] || [];
     const heavyJobsByWorker = heavyWorkerJobs.filter(
       (j) => j.group === 'heavy',
     );
     expect(heavyJobsByWorker.length).toBe(10);
-
-    await Promise.all(workers.map((w) => w.close()));
-    await redis.quit();
   });
 
-  it('should handle concurrent add and dequeue operations', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:concurrent` });
+  test('should handle concurrent add and dequeue operations', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const processed: number[] = [];
     const enqueued: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -129,7 +96,6 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    // Concurrent producers
     const producers = [];
     for (let producerId = 0; producerId < 3; producerId++) {
       const producer = async () => {
@@ -148,14 +114,11 @@ describe('Concurrency and Race Condition Tests', () => {
     }
 
     await Promise.all(producers);
-
-    // Wait for processing to complete
     await q.waitForEmpty();
 
     expect(processed.length).toBe(30);
     expect(enqueued.length).toBe(30);
 
-    // Check that each group maintains FIFO order
     const groupOrders: { [key: string]: number[] } = {};
     processed.forEach((id) => {
       const groupId = Math.floor(id / 10);
@@ -169,16 +132,11 @@ describe('Concurrency and Race Condition Tests', () => {
       );
       expect(order).toEqual(expectedOrder);
     });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('should handle race conditions during job completion', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:completion` });
+  test('should handle race conditions during job completion', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Enqueue jobs
     for (let i = 0; i < 10; i++) {
       await q.add({
         groupId: 'completion-group',
@@ -190,7 +148,7 @@ describe('Concurrency and Race Condition Tests', () => {
     const completed: number[] = [];
     const completionAttempts = new Map<number, number>();
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -202,31 +160,21 @@ describe('Concurrency and Race Condition Tests', () => {
     });
 
     worker.run();
-
     await q.waitForEmpty();
 
-    // Each job should be completed exactly once
     expect(completed.length).toBe(10);
     expect(new Set(completed).size).toBe(10);
 
-    // No job should be attempted more than once (no double processing)
     completionAttempts.forEach((attempts, _jobId) => {
       expect(attempts).toBe(1);
     });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('should handle worker stopping during job processing', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:stopping`,
+  test('should handle worker stopping during job processing', async ({ createQueue, createWorker }) => {
+    const q = createQueue({
       jobTimeoutMs: 500,
     });
 
-    // Enqueue jobs
     for (let i = 0; i < 5; i++) {
       await q.add({
         groupId: 'stopping-group',
@@ -238,7 +186,7 @@ describe('Concurrency and Race Condition Tests', () => {
     const processed: number[] = [];
     let _processingCount = 0;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -253,11 +201,9 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    // Wait for worker to stop and jobs to be reclaimed - reduced
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    // Create new worker to process remaining jobs
-    const worker2 = new Worker({
+    const worker2 = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -269,21 +215,16 @@ describe('Concurrency and Race Condition Tests', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // All jobs should eventually be processed
     expect(processed.length).toBeGreaterThanOrEqual(4);
-
-    await worker2.close();
-    await redis.quit();
   });
 
-  it('should handle high-frequency add/dequeue cycles', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:highfreq` });
+  test('should handle high-frequency add/dequeue cycles', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const processed: number[] = [];
     const timestamps: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -294,16 +235,14 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    // Rapidly add jobs
     const start = Date.now();
     for (let i = 0; i < 100; i++) {
       await q.add({
-        groupId: `freq-group-${i % 5}`, // 5 parallel groups
+        groupId: `freq-group-${i % 5}`,
         data: { id: i },
         orderMs: i,
       });
 
-      // Very short delay between enqueues
       if (i % 10 === 0) {
         await new Promise((resolve) => setImmediate(resolve));
       }
@@ -311,12 +250,10 @@ describe('Concurrency and Race Condition Tests', () => {
 
     const enqueueTime = Date.now() - start;
 
-    // Wait for processing
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     expect(processed.length).toBe(100);
 
-    // Check that groups maintain order
     const groupedResults: { [key: number]: number[] } = {};
     processed.forEach((id) => {
       const groupId = id % 5;
@@ -330,17 +267,12 @@ describe('Concurrency and Race Condition Tests', () => {
       );
       expect(jobs.sort((a, b) => a - b)).toEqual(expectedJobs);
     });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('should handle memory pressure with large datas', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:memory` });
+  test('should handle memory pressure with large datas', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Create large datas
-    const largeData = 'x'.repeat(10000); // 10KB data
+    const largeData = 'x'.repeat(10000);
 
     for (let i = 0; i < 20; i++) {
       await q.add({
@@ -353,7 +285,7 @@ describe('Concurrency and Race Condition Tests', () => {
     const processed: number[] = [];
     const memoryUsage: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -370,45 +302,38 @@ describe('Concurrency and Race Condition Tests', () => {
 
     expect(processed.length).toBe(20);
 
-    // Memory should not grow indefinitely
     const memoryGrowth = memoryUsage[memoryUsage.length - 1] - memoryUsage[0];
-    expect(memoryGrowth).toBeLessThan(200 * 1024 * 1024); // Less than 200MB growth
-
-    await worker.close();
-    await redis.quit();
+    expect(memoryGrowth).toBeLessThan(200 * 1024 * 1024);
   });
 
-  it('should handle deadlock scenarios with multiple groups', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:deadlock` });
+  test('should handle deadlock scenarios with multiple groups', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Create a scenario where groups can process independently and avoid true deadlock
-    // Put independent jobs first in each group so they can be processed
     await q.add({
       groupId: 'group-A',
       data: { id: 'A1', waitFor: null },
       orderMs: 1,
-    }); // Independent
+    });
     await q.add({
       groupId: 'group-B',
       data: { id: 'B1', waitFor: null },
       orderMs: 2,
-    }); // Independent
+    });
     await q.add({
       groupId: 'group-A',
       data: { id: 'A2', waitFor: 'B1' },
       orderMs: 3,
-    }); // Depends on B1
+    });
     await q.add({
       groupId: 'group-B',
       data: { id: 'B2', waitFor: 'A1' },
       orderMs: 4,
-    }); // Depends on A1
+    });
 
     const processed: string[] = [];
     const failed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       maxAttempts: 3,
@@ -430,48 +355,22 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1500)); // Longer wait for retries
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    // Should process independent jobs first (A1, B1), then dependent jobs (A2, B2) via retry
-    expect(processed).toContain('A1'); // Independent, should succeed
-    expect(processed).toContain('B1'); // Independent, should succeed
-    expect(processed).toContain('A2'); // Should succeed after B1 is done
-    expect(processed).toContain('B2'); // Should succeed after A1 is done
-
-    // The test should pass even if there are no failures (jobs might process in perfect order)
-    // expect(failed.length).toBeGreaterThan(0);
-
-    await worker.close();
-    await redis.quit();
+    expect(processed).toContain('A1');
+    expect(processed).toContain('B1');
+    expect(processed).toContain('A2');
+    expect(processed).toContain('B2');
   });
 });
 
 describe('Group Concurrency', () => {
-  const redis = createRedis();
-  const namespace = `test:concurrency:group:${Date.now()}`;
-
-  afterAll(async () => {
-    try {
-      const keys = await redis.keys(`${namespace}*`);
-      if (keys.length) await redis.del(keys);
-    } catch (e) {
-      // Ignore cleanup errors
-    }
-    try {
-      await redis.quit();
-    } catch (e) {
-      // Ignore quit errors if connection already closed
-    }
-  });
-
-  it('should limit concurrency for specific group', async () => {
-    const queue = new Queue({ redis, namespace });
+  test('should limit concurrency for specific group', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
     const groupId = 'limited-group';
 
-    // 1. 设置该组并发上限为 2
     await queue.groups.setConcurrency(groupId, 2);
 
-    // 2. 添加 5 个耗时任务
     for (let i = 0; i < 5; i++) {
       await queue.add({
         groupId,
@@ -480,43 +379,30 @@ describe('Group Concurrency', () => {
       });
     }
 
-    // 3. 启动 Worker，设置全局并发为 5 (足以一次性处理完，受限于分组设置)
     const activeJobs: string[] = [];
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       concurrency: 5,
       handler: async (job) => {
         activeJobs.push(job.id);
-        // 模拟耗时，确保能观测到并发数
         await new Promise(resolve => setTimeout(resolve, 200));
         activeJobs.splice(activeJobs.indexOf(job.id), 1);
       }
     });
 
-    // 4. 观测峰值并发数
     let maxConcurrent = 0;
     const interval = setInterval(() => {
       maxConcurrent = Math.max(maxConcurrent, activeJobs.length);
     }, 10);
 
-    await new Promise(resolve => setTimeout(resolve, 1500)); // 等待所有任务完成
+    worker.run();
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
     clearInterval(interval);
 
     console.log('Max concurrent jobs observed:', maxConcurrent);
 
-    // 理论上应该是 2，但也可能因为时间片采集有轻微误差，允许瞬间到 3 但绝不能到 5
     expect(maxConcurrent).toBeLessThanOrEqual(3);
     expect(maxConcurrent).toBeGreaterThanOrEqual(2);
-
-    await worker.close();
-    await queue.close();
   });
 });
-
-// Note: Additional tests for multi-group concurrency and dynamic modification
-// are covered by the basic test above. The setGroupConcurrency/getGroupConcurrency
-// APIs are tested implicitly through the main test case.
-
-async function _wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

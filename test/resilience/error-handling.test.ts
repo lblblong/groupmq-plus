@@ -1,22 +1,10 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, test } from 'vitest';
-import { Job, Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
+import { Job } from '../../src';
 
 describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
-  const namespace = `test:edge:${Date.now()}`;
+  test('应当处理空载荷和空值 (should handle empty payloads and null values)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-  afterAll(async () => {
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应当处理空载荷和空值 (should handle empty payloads and null values)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:empty` });
-
-    // Test various empty/null payloads
     const testCases = [
       { id: 1, data: null },
       { id: 2, data: undefined },
@@ -27,10 +15,9 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
       { id: 7, data: false },
     ];
 
-    // Enqueue all test cases with different groups for parallel processing
     for (const testCase of testCases) {
       await q.add({
-        groupId: `empty-group-${testCase.id}`, // Different groups = parallel processing
+        groupId: `empty-group-${testCase.id}`,
         data: testCase.data,
         orderMs: testCase.id,
       });
@@ -38,7 +25,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     const processed: any[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -47,24 +34,16 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     });
 
     worker.run();
-
-    await q.waitForEmpty(); // More time for processing
+    await q.waitForEmpty();
 
     expect(processed.length).toBe(testCases.length);
-
-    // Verify payloads are preserved correctly (undefined becomes null)
     expect(processed).toContain(null);
-    expect(processed).toEqual([null, null, {}, [], '', 0, false]); // undefined -> null
-
-    await worker.close();
-    await redis.quit();
+    expect(processed).toEqual([null, null, {}, [], '', 0, false]);
   });
 
-  it('应当处理极大的载荷 (should handle extremely large payloads)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:large` });
+  test('应当处理极大的载荷 (should handle extremely large payloads)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Create large payload (1MB)
     const largePayload = {
       id: 'large-payload',
       data: 'x'.repeat(1024 * 1024),
@@ -86,7 +65,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     let processedData: any = null;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -95,21 +74,16 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     });
 
     worker.run();
-
     await q.waitForEmpty();
 
     expect(processedData).not.toBeNull();
     expect(processedData.id).toBe('large-payload');
     expect(processedData.data.length).toBe(1024 * 1024);
     expect(processedData.metadata.nested.array.length).toBe(1000);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当处理载荷中的特殊字符和 Unicode (should handle special characters and unicode in payloads)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:unicode` });
+  test('应当处理载荷中的特殊字符和 Unicode (should handle special characters and unicode in payloads)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const specialPayloads = [
       { id: 1, text: 'Hello 🌍 World! 你好世界 🚀' },
@@ -125,7 +99,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     for (const payload of specialPayloads) {
       await q.add({
-        groupId: `unicode-group-${payload.id}`, // Different groups for parallel processing
+        groupId: `unicode-group-${payload.id}`,
         data: payload,
         orderMs: payload.id,
       });
@@ -133,7 +107,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     const processed: any[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -143,7 +117,6 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     worker.run();
 
-    // Wait until all jobs are processed or timeout
     const startTime = Date.now();
     while (
       processed.length < specialPayloads.length &&
@@ -152,31 +125,21 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // Logging removed for clean test output
-
     expect(processed.length).toBe(specialPayloads.length);
 
-    // Verify all special characters are preserved
     processed.forEach((payload, index) => {
       expect(payload.text).toBe(specialPayloads[index].text);
     });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当优雅地处理格式错误或损坏的数据 (should handle malformed or corrupted data gracefully)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:corrupted` });
+  test('应当优雅地处理格式错误或损坏的数据 (should handle malformed or corrupted data gracefully)', async ({ redis, createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Manually insert corrupted data into Redis
-    // Need to use the same namespace prefix as the queue (which auto-prefixes with 'groupmq:')
-    const queueNamespace = `groupmq:${namespace}:corrupted`;
+    const queueNamespace = q.namespace;
     const jobKey = `${queueNamespace}:job:corrupted-job`;
     const groupKey = `${queueNamespace}:g:corrupted-group`;
     const readyKey = `${queueNamespace}:ready`;
 
-    // Insert malformed job data
     await redis.hmset(jobKey, {
       id: 'corrupted-job',
       groupId: 'corrupted-group',
@@ -195,7 +158,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     const errors: string[] = [];
     const processed: any[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -207,22 +170,15 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     });
 
     worker.run();
-
     await q.waitForEmpty();
 
-    // With graceful JSON parsing, corrupted job should be processed with null payload
     expect(processed.length).toBe(1);
-    expect(processed[0]).toBeNull(); // Corrupted JSON becomes null payload
-
-    await worker.close();
-    await redis.quit();
+    expect(processed[0]).toBeNull();
   });
 
-  it('应当处理极长的组 ID 和任务 ID (should handle extremely long group IDs and job IDs)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:long` });
+  test('应当处理极长的组 ID 和任务 ID (should handle extremely long group IDs and job IDs)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Create very long group ID (just under Redis key length limit)
     const longGroupId = `group-${'x'.repeat(500)}`;
     const longData = {
       veryLongProperty: 'y'.repeat(1000),
@@ -236,7 +192,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     let processedJob: Job | null = null;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -251,16 +207,11 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     expect(processedJob).not.toBeNull();
     expect(processedJob!.groupId).toBe(longGroupId);
     expect(processedJob!.data.veryLongProperty.length).toBe(1000);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当处理快速 worker 启动/停止循环 (should handle rapid worker start/stop cycles)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:rapid` });
+  test('应当处理快速 worker 启动/停止循环 (should handle rapid worker start/stop cycles)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Enqueue some jobs
     for (let i = 0; i < 10; i++) {
       await q.add({
         groupId: 'rapid-group',
@@ -271,9 +222,8 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     const processed: number[] = [];
 
-    // Rapidly start and stop workers
     for (let cycle = 0; cycle < 5; cycle++) {
-      const worker = new Worker({
+      const worker = createWorker({
         queue: q,
         blockingTimeoutSec: 1,
         handler: async (job) => {
@@ -283,15 +233,11 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
       });
 
       worker.run();
-
-      // Very short runtime
       await new Promise((resolve) => setTimeout(resolve, 100));
-
       await worker.close();
     }
 
-    // Final worker to clean up remaining jobs
-    const finalWorker = new Worker({
+    const finalWorker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -301,26 +247,20 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     finalWorker.run();
     await q.waitForEmpty();
-    await finalWorker.close();
 
-    // All jobs should eventually be processed
     expect(processed.length).toBe(10);
-    expect(new Set(processed).size).toBe(10); // No duplicates
-
-    await redis.quit();
+    expect(new Set(processed).size).toBe(10);
   });
 
-  it('应当处理时钟偏斜和基于时间的边缘情况 (should handle clock skew and time-based edge cases)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:time` });
+  test('应当处理时钟偏斜和基于时间的边缘情况 (should handle clock skew and time-based edge cases)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Test jobs with timestamps far in the past and future
     const timeTestCases = [
-      { id: 1, orderMs: 0 }, // Unix epoch
-      { id: 2, orderMs: Date.now() - 86400000 }, // 24 hours ago
-      { id: 3, orderMs: Date.now() }, // Now
-      { id: 4, orderMs: Date.now() + 86400000 }, // 24 hours from now
-      { id: 5, orderMs: Number.MAX_SAFE_INTEGER }, // Far future
+      { id: 1, orderMs: 0 },
+      { id: 2, orderMs: Date.now() - 86400000 },
+      { id: 3, orderMs: Date.now() },
+      { id: 4, orderMs: Date.now() + 86400000 },
+      { id: 5, orderMs: Number.MAX_SAFE_INTEGER },
     ];
 
     for (const testCase of timeTestCases) {
@@ -333,7 +273,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     const processed: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
@@ -345,19 +285,13 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    // Should process all jobs in chronological order
     expect(processed.length).toBe(5);
     expect(processed).toEqual([1, 2, 3, 4, 5]);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当处理载荷中的循环引用 (should handle circular references in payloads)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:circular` });
+  test('应当处理载荷中的循环引用 (should handle circular references in payloads)', async ({ createQueue }) => {
+    const q = createQueue();
 
-    // Create object with circular reference
     const circularObj: any = { id: 'circular-test' };
     circularObj.self = circularObj;
 
@@ -369,21 +303,14 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
       });
     } catch (err) {
       enqueueFailed = true;
-      expect((err as Error).message).toContain('circular'); // JSON.stringify should fail
+      expect((err as Error).message).toContain('circular');
     }
 
     expect(enqueueFailed).toBe(true);
-
-    await redis.quit();
   });
 
-  it('应当处理零和负的可见性超时 (should handle zero and negative visibility timeouts)', async () => {
-    const redis = createRedis();
-
-    // Test with zero visibility timeout
-    const q1 = new Queue({
-      redis,
-      namespace: `${namespace}:zero-vt`,
+  test('应当处理零和负的可见性超时 (should handle zero and negative visibility timeouts)', async ({ redis, createQueue }) => {
+    const q1 = createQueue({
       jobTimeoutMs: 1,
     });
 
@@ -392,10 +319,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     const job1 = await q1.reserve();
     expect(job1).not.toBeNull();
 
-    // Test with negative visibility timeout (should use default)
-    const q2 = new Queue({
-      redis: redis.duplicate(),
-      namespace: `${namespace}:neg-vt`,
+    const q2 = createQueue({
       jobTimeoutMs: -1000,
     });
 
@@ -403,15 +327,11 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     const job2 = await q2.reserve();
     expect(job2).not.toBeNull();
-
-    await redis.quit();
   });
 
-  it('应当处理断开连接的 Redis 上的队列操作 (should handle queue operations on disconnected Redis)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:disconnected` });
+  test('应当处理断开连接的 Redis 上的队列操作 (should handle queue operations on disconnected Redis)', async ({ redis, createQueue }) => {
+    const q = createQueue();
 
-    // Disconnect Redis
     await redis.disconnect();
 
     let enqueueError = null;
@@ -432,62 +352,37 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     expect(enqueueError).not.toBeNull();
     expect(reserveError).not.toBeNull();
 
-    // Reconnect should work
     await redis.connect();
 
-    // Now operations should work
     await q.add({
       groupId: 'reconnected-group',
       data: { test: 'reconnected' },
     });
     const job = await q.reserve();
     expect(job).not.toBeNull();
-
-    await redis.quit();
   });
 });
 
 describe('损坏的 Redis 数据恢复 (Corrupted Redis Data Recovery)', () => {
-  let queue: Queue;
-  let redis: any;
-
-  beforeEach(async () => {
-    redis = createRedis();
-    const ns = `test:corrupted:${Date.now()}`;
-    queue = new Queue({
-      redis,
-      namespace: ns,
+  test('应当优雅地处理缺失的任务哈希而不出现连接错误 (should handle missing job hash gracefully without concatenation error)', async ({ redis, createQueue }) => {
+    const queue = createQueue({
       jobTimeoutMs: 5000,
     });
-  });
 
-  afterEach(async () => {
-    await queue.close();
-    // Don't quit redis separately - queue owns it and closes it
-  });
-
-  test('应当优雅地处理缺失的任务哈希而不出现连接错误 (should handle missing job hash gracefully without concatenation error)', async () => {
     const groupId = 'test-group';
     const fakeJobId = 'fake-job-id-12345';
 
-    // Manually create a corrupted state: job ID in group sorted set but no job hash
     const gZ = `${queue.namespace}:g:${groupId}`;
     const readyKey = `${queue.namespace}:ready`;
 
-    // Add job ID to group sorted set
     await redis.zadd(gZ, 1000, fakeJobId);
-
-    // Add group to ready queue
     await redis.zadd(readyKey, 1000, groupId);
 
-    // Try to reserve - should not crash with "attempt to concatenate" error
     let errorOccurred = false;
     let concatenationError = false;
 
     try {
-      // This should handle the missing job hash gracefully
       const result = await queue['reserve']();
-      // Result should be null since job hash doesn't exist
       expect(result).toBeNull();
     } catch (error: any) {
       errorOccurred = true;
@@ -496,39 +391,35 @@ describe('损坏的 Redis 数据恢复 (Corrupted Redis Data Recovery)', () => {
       }
     }
 
-    // The critical assertion: no concatenation error should occur
     expect(concatenationError).toBe(false);
 
-    // Verify queue is still functional after handling corruption
     const validJobId = await queue.add({ groupId, data: { test: 'valid' } });
     expect(validJobId).toBeTruthy();
 
-    // Should be able to reserve the valid job
     const validJob = await queue['reserve']();
     expect(validJob).not.toBeNull();
-    // validJobId is a string, validJob is an object with id property
     expect(typeof validJob?.id).toBe('string');
     expect(validJob?.groupId).toBe(groupId);
   });
 
-  test('应当在 reserveAtomic 中处理缺失的任务哈希 (should handle missing job hash in reserveAtomic)', async () => {
+  test('应当在 reserveAtomic 中处理缺失的任务哈希 (should handle missing job hash in reserveAtomic)', async ({ redis, createQueue }) => {
+    const queue = createQueue({
+      jobTimeoutMs: 5000,
+    });
+
     const groupId = 'atomic-group';
     const fakeJobId = 'fake-atomic-job';
 
-    // Create corrupted state
     const gZ = `${queue.namespace}:g:${groupId}`;
     await redis.zadd(gZ, 1000, fakeJobId);
 
-    // Add to ready queue
     const readyKey = `${queue.namespace}:ready`;
     await redis.zadd(readyKey, 1000, groupId);
 
     let concatenationError = false;
 
     try {
-      // Should handle gracefully
       const result = await queue['reserveAtomic'](groupId);
-      // Should return empty status
       expect(result.status).toBe('empty');
     } catch (error: any) {
       if (error.message && error.message.includes('attempt to concatenate')) {
@@ -538,7 +429,6 @@ describe('损坏的 Redis 数据恢复 (Corrupted Redis Data Recovery)', () => {
 
     expect(concatenationError).toBe(false);
 
-    // Verify queue still works
     await queue.add({ groupId, data: { test: 'valid' } });
     const result = await queue['reserveAtomic'](groupId);
     expect(result.status).toBe('success');
@@ -547,7 +437,3 @@ describe('损坏的 Redis 数据恢复 (Corrupted Redis Data Recovery)', () => {
     }
   });
 });
-
-async function _wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

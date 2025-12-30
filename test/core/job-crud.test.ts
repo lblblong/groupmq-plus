@@ -1,25 +1,10 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { type Job, Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
+import type { Job } from '../../src';
 
 describe('任务 CRUD 操作', () => {
-  const namespace = `test:job:${Date.now()}`;
-
-  afterAll(async () => {
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应始终返回任务实体', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:dedupe`,
-      keepCompleted: 1,
-    });
-    const job = await q.add({ groupId: 'g1', data: { n: 1 } });
+  test('应始终返回任务实体', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ keepCompleted: 1 });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 } });
 
     expect(job).toBeDefined();
     expect(job.id).toBeDefined();
@@ -37,19 +22,19 @@ describe('任务 CRUD 操作', () => {
     expect(job.opts.attempts).toBe(3);
     expect(job.opts.delay).toBeUndefined();
 
-    const worker = new Worker({
-      queue: q,
+    let eventJob: Job | undefined;
+    const worker = createWorker({
+      queue,
       handler: async () => {
         return 'return value from worker';
       },
     });
-    worker.run();
-    let eventJob: Job | undefined;
-    worker.on('completed', (job) => {
-      eventJob = job as Job;
+    worker.on('completed', (j) => {
+      eventJob = j as Job;
     });
+    worker.run();
 
-    await q.waitForEmpty();
+    await queue.waitForEmpty();
 
     if (eventJob) {
       expect(eventJob.processedOn).toBeDefined();
@@ -71,7 +56,7 @@ describe('任务 CRUD 操作', () => {
       throw new Error('Completed job event not received');
     }
 
-    const completedJob = await q.getJob(job.id);
+    const completedJob = await queue.getJob(job.id);
     expect(completedJob).toBeDefined();
     expect(completedJob.processedOn).toBeDefined();
     expect(completedJob.finishedOn).toBeDefined();
@@ -84,55 +69,40 @@ describe('任务 CRUD 操作', () => {
     expect((completedJob.finishedOn as number) <= now2).toBe(true);
     expect(
       (completedJob.finishedOn as number) >=
-        (completedJob.processedOn as number),
+      (completedJob.processedOn as number),
     ).toBe(true);
     expect(completedJob.failedReason).toBeUndefined();
     expect(completedJob.data).toEqual({ n: 1 });
     expect(completedJob.returnvalue).toEqual('return value from worker');
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应通过队列和任务实例更新任务数据', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:update`,
-      keepCompleted: 1,
-    });
+  test('应通过队列和任务实例更新任务数据', async ({ createQueue }) => {
+    const queue = createQueue<{ n: number }>({ keepCompleted: 1 });
 
-    const job = await q.add({ groupId: 'g1', data: { n: 1 } });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 } });
 
     // Update via queue
-    await q.updateData(job.id, { n: 2 });
-    const j1 = await q.getJob(job.id);
+    await queue.updateData(job.id, { n: 2 });
+    const j1 = await queue.getJob(job.id);
     expect(j1.data).toEqual({ n: 2 });
 
     // Update via job instance
     await j1.updateData({ n: 3 });
-    const j2 = await q.getJob(job.id);
+    const j2 = await queue.getJob(job.id);
     expect(j2.data).toEqual({ n: 3 });
-
-    await redis.quit();
   });
 
-  it('应在工作线程中处理更新的任务数据', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:update-worker`,
-      keepCompleted: 1,
-    });
+  test('应在工作线程中处理更新的任务数据', async ({ createQueue, createWorker }) => {
+    const queue = createQueue<{ n: number }>({ keepCompleted: 1 });
 
-    const job = await q.add({ groupId: 'g1', data: { n: 1 } });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 } });
 
-    // Update before a worker reserves it so the reserved payload reflects the change
-    await q.updateData(job.id, { n: 99 });
+    // Update before a worker reserves it
+    await queue.updateData(job.id, { n: 99 });
 
     let seen: { n: number } | null = null;
-    const worker = new Worker<{ n: number }>({
-      queue: q,
+    const worker = createWorker<{ n: number }>({
+      queue,
       handler: async (reserved) => {
         seen = reserved.data;
         return 'ok';
@@ -140,26 +110,19 @@ describe('任务 CRUD 操作', () => {
     });
     worker.run();
 
-    await q.waitForEmpty();
+    await queue.waitForEmpty();
 
     expect(seen).toEqual({ n: 99 });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应提升延迟任务并立即处理它', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:promote`,
-    });
+  test('应提升延迟任务并立即处理它', async ({ createQueue, createWorker }) => {
+    const queue = createQueue<{ n: number }>();
 
-    const job = await q.add({ groupId: 'g1', data: { n: 1 }, delay: 60_000 });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 }, delay: 60_000 });
 
     let seen: { n: number } | null = null;
-    const worker = new Worker<{ n: number }>({
-      queue: q,
+    const worker = createWorker<{ n: number }>({
+      queue,
       handler: async (reserved) => {
         seen = reserved.data;
         return 'ok';
@@ -168,31 +131,24 @@ describe('任务 CRUD 操作', () => {
     worker.run();
 
     // Promote to run now
-    await q.promote(job.id);
-    await q.waitForEmpty();
+    await queue.promote(job.id);
+    await queue.waitForEmpty();
 
     expect(seen).toEqual({ n: 1 });
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应移除等待中的任务而不处理它', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:remove`,
-    });
+  test('应移除等待中的任务而不处理它', async ({ createQueue, createWorker }) => {
+    const queue = createQueue<{ n: number }>();
 
-    const job = await q.add({ groupId: 'g1', data: { n: 1 } });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 } });
 
     // Remove the job before worker starts
-    const removed = await q.remove(job.id);
+    const removed = await queue.remove(job.id);
     expect(removed).toBe(true);
 
     let processed = false;
-    const worker = new Worker<{ n: number }>({
-      queue: q,
+    const worker = createWorker<{ n: number }>({
+      queue,
       handler: async () => {
         processed = true;
         return 'ok';
@@ -200,35 +156,25 @@ describe('任务 CRUD 操作', () => {
     });
     worker.run();
 
-    // Wait a bit and ensure nothing processed
-    await q.waitForEmpty(); // queue should be empty since we removed
+    await queue.waitForEmpty();
     expect(processed).toBe(false);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应为失败的任务提供错误信息', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:failed`,
-      keepFailed: 1,
-    });
-    const job = await q.add({ groupId: 'g1', data: { n: 1 } });
+  test('应为失败的任务提供错误信息', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ keepFailed: 1 });
+    const job = await queue.add({ groupId: 'g1', data: { n: 1 } });
 
-    const worker = new Worker({
-      queue: q,
+    const worker = createWorker({
+      queue,
       handler: async () => {
         throw new Error('Failed job');
       },
     });
-
     worker.run();
 
-    await q.waitForEmpty();
+    await queue.waitForEmpty();
 
-    const failedJob = await q.getJob(job.id);
+    const failedJob = await queue.getJob(job.id);
     expect(failedJob).toBeDefined();
     expect(failedJob.failedReason).toEqual('Failed job');
     expect(failedJob.stacktrace).toBeDefined();

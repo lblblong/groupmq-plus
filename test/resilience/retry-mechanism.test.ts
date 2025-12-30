@@ -1,27 +1,12 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker, UnrecoverableError } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
+import { UnrecoverableError } from '../../src';
 
 describe('重试行为测试 (Retry Behavior Tests)', () => {
-  const namespace = `test:retry:${Date.now()}`;
-
-  afterAll(async () => {
-    // Cleanup after all tests
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应当尊重 maxAttempts 并移动到死信队列 (should respect maxAttempts and move to dead letter queue)', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:dlq`,
+  test('应当尊重 maxAttempts 并移动到死信队列 (should respect maxAttempts and move to dead letter queue)', async ({ createQueue, createWorker }) => {
+    const q = createQueue({
       maxAttempts: 3,
     });
 
-    // Enqueue a job that will always fail
     const _jobId = await q.add({
       groupId: 'fail-group',
       data: { shouldFail: true },
@@ -29,7 +14,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     });
 
     let attemptCount = 0;
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 0.1,
       schedulerIntervalMs: 50,
@@ -44,23 +29,16 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     worker.run();
 
-    // Wait for all attempts to complete
     await q.waitForEmpty();
 
-    // Should have tried exactly maxAttempts times
     expect(attemptCount).toBe(2);
 
-    // Job should no longer be reservable
     const job = await q.reserve();
     expect(job).toBeNull();
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当正确使用指数退避 (should use exponential backoff correctly)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:backoff` });
+  test('应当正确使用指数退避 (should use exponential backoff correctly)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     await q.add({
       groupId: 'backoff-group',
@@ -71,7 +49,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const attempts: number[] = [];
     let failCount = 0;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 5,
       maxAttempts: 3,
@@ -87,31 +65,24 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     worker.run();
 
-    // Wait for all attempts
     await q.waitForEmpty();
 
     expect(attempts.length).toBe(3);
 
-    // Check that backoff delays were respected (with some tolerance)
     if (attempts.length >= 2) {
       const delay1 = attempts[1] - attempts[0];
-      expect(delay1).toBeGreaterThan(80); // Should be ~100ms
+      expect(delay1).toBeGreaterThan(80);
     }
 
     if (attempts.length >= 3) {
       const delay2 = attempts[2] - attempts[1];
-      expect(delay2).toBeGreaterThan(180); // Should be ~200ms
+      expect(delay2).toBeGreaterThan(180);
     }
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当处理同一组中的混合成功/失败 (should handle mixed success/failure in same group)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:mixed` });
+  test('应当处理同一组中的混合成功/失败 (should handle mixed success/failure in same group)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Enqueue multiple jobs in same group
     await q.add({
       groupId: 'mixed-group',
       data: { id: 1, shouldFail: false },
@@ -131,7 +102,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const processed: number[] = [];
     let failureCount = 0;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 5,
       maxAttempts: 3,
@@ -149,16 +120,11 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     await q.waitForEmpty();
 
-    // Should process in order: 1, 2 (retry), 3
     expect(processed).toEqual([1, 2, 3]);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当处理不同错误类型的重试 (should handle retry with different error types)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:errors` });
+  test('应当处理不同错误类型的重试 (should handle retry with different error types)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     await q.add({ groupId: 'error-group', data: { errorType: 'timeout' } });
     await q.add({ groupId: 'error-group', data: { errorType: 'network' } });
@@ -167,7 +133,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const errors: string[] = [];
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 5,
       maxAttempts: 2,
@@ -197,7 +163,6 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     await q.waitForEmpty();
 
-    // Filter out the failure tracking entries
     const actualProcessed = processed.filter(
       (item) => !item.includes('-failed'),
     );
@@ -206,16 +171,11 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     expect(errors[0]).toContain('timeout: Request timeout');
     expect(errors[1]).toContain('network: Network error');
     expect(errors[2]).toContain('parse: Parse error');
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当在具有多个组的重试期间维持 FIFO 顺序 (should maintain FIFO order during retries with multiple groups)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:multigroup` });
+  test('应当在具有多个组的重试期间维持 FIFO 顺序 (should maintain FIFO order during retries with multiple groups)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Create jobs in two groups with interleaved order
     await q.add({
       groupId: 'group-A',
       data: { id: 'A1', fail: true },
@@ -240,7 +200,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const processed: string[] = [];
     const failedIds = new Set<string>();
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 5,
       maxAttempts: 3,
@@ -259,29 +219,20 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     await q.waitForEmpty();
 
-    // Groups should maintain FIFO: A1(retry), A2, B1, B2(retry)
-    // But groups can be processed in parallel
     expect(processed).toContain('A1');
     expect(processed).toContain('A2');
     expect(processed).toContain('B1');
     expect(processed).toContain('B2');
 
-    // Within each group, order should be maintained
     const groupAOrder = processed.filter((id) => id.startsWith('A'));
     const groupBOrder = processed.filter((id) => id.startsWith('B'));
 
     expect(groupAOrder).toEqual(['A1', 'A2']);
     expect(groupBOrder).toEqual(['B1', 'B2']);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当在抛出 UnrecoverableError 时立即失败 (should immediately fail when UnrecoverableError is thrown)', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:unrecoverable`,
+  test('应当在抛出 UnrecoverableError 时立即失败 (should immediately fail when UnrecoverableError is thrown)', async ({ createQueue, createWorker }) => {
+    const q = createQueue({
       maxAttempts: 5,
       keepFailed: 1,
     });
@@ -292,7 +243,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     });
 
     let attemptCount = 0;
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async () => {
@@ -310,14 +261,10 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const failedJobs = await q.getFailed();
     expect(failedJobs.length).toBe(1);
     expect(failedJobs[0].failedReason).toBe('This job is broken');
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当支持基于错误类型的智能退避 (should support smart backoff based on error type)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:smart-backoff` });
+  test('应当支持基于错误类型的智能退避 (should support smart backoff based on error type)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     class RateLimitError extends Error {
       retryAfterMs: number;
@@ -335,7 +282,7 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
 
     const attemptTimestamps: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       backoff: (attempt, err) => {
@@ -361,8 +308,5 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
     const delay = attemptTimestamps[1] - attemptTimestamps[0];
     expect(delay).toBeGreaterThanOrEqual(450);
     expect(delay).toBeLessThan(1500);
-
-    await worker.close();
-    await redis.quit();
   });
 });

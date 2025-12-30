@@ -1,29 +1,14 @@
 import pino from 'pino';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, test } from '../helpers/suite';
 import winston from 'winston';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
 
 describe('日志记录器 (logger)', () => {
-  const redis = createRedis();
-  const namespace = `test:q1:${Date.now()}`;
-
-  beforeAll(async () => {
-    // flush only this namespace keys (best-effort)
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  afterAll(async () => {
-    await redis.quit();
-  });
-
-  it('应当支持 pino 日志记录器 (pino)', () => {
+  test('应当支持 pino 日志记录器 (pino)', async ({ createQueue, createWorker }) => {
     const logger = pino();
-    const q = new Queue({ redis, namespace, jobTimeoutMs: 5000 });
-    const worker = new Worker({
+    const queue = createQueue({ jobTimeoutMs: 5000 });
+    const worker = createWorker({
       logger,
-      queue: q,
+      queue,
       handler: async () => {
         return 'return value from worker';
       },
@@ -31,12 +16,12 @@ describe('日志记录器 (logger)', () => {
     worker.run();
   });
 
-  it('应当支持 winston 日志记录器 (winston)', () => {
+  test('应当支持 winston 日志记录器 (winston)', async ({ createQueue, createWorker }) => {
     const logger = winston.createLogger();
-    const q = new Queue({ redis, namespace, jobTimeoutMs: 5000 });
-    const worker = new Worker({
+    const queue = createQueue({ jobTimeoutMs: 5000 });
+    const worker = createWorker({
       logger,
-      queue: q,
+      queue,
       handler: async () => {
         return 'return value from worker';
       },

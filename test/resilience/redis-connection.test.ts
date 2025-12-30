@@ -1,20 +1,13 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
+import { describe, expect, test } from '../helpers/suite';
 import { createRedis } from '../helpers/redis';
+import { Queue, Worker } from '../../src';
 import { Redis } from 'ioredis';
 
 describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)', () => {
-  const namespace = `test:disconnect:${Date.now()}`;
+  // 注意：这些测试需要手动管理 Redis 连接，因为它们测试的是断开/重连场景
+  // 不能使用 fixture 自动管理的连接
 
-  afterAll(async () => {
-    // Cleanup after all tests
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应当优雅地处理 Redis 连接丢失 (should handle Redis connection drops gracefully)', async () => {
+  test('应当优雅地处理 Redis 连接丢失 (should handle Redis connection drops gracefully)', async ({ namespace }) => {
     const redis = createRedis({
       lazyConnect: true,
       maxRetriesPerRequest: 3,
@@ -22,7 +15,6 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     const q = new Queue({ redis, namespace: `${namespace}:drop` });
 
-    // Enqueue some jobs before disconnect
     await q.add({ groupId: 'persistent-group', data: { id: 1 } });
     await q.add({ groupId: 'persistent-group', data: { id: 2 } });
 
@@ -42,32 +34,27 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     worker.run();
 
-    // Let it process first job
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    // Simulate connection drop by disconnecting
     await redis.disconnect();
 
-    // Wait a bit while disconnected
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // Reconnect
     await redis.connect();
 
-    // Add another job after reconnection
     await q.add({ groupId: 'persistent-group', data: { id: 3 } });
 
-    // Wait for processing to resume
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     expect(processed.length).toBeGreaterThan(0);
     expect(processed).toContain(1);
 
     await worker.close();
-    await redis.quit();
+    await q.close();
+    try { await redis.quit(); } catch { }
   });
 
-  it('应当从 Redis 服务器重启模拟中恢复 (should recover from Redis server restart simulation)', async () => {
+  test('应当从 Redis 服务器重启模拟中恢复 (should recover from Redis server restart simulation)', async ({ namespace }) => {
     const redis = createRedis({
       connectTimeout: 1000,
       enableReadyCheck: true,
@@ -76,7 +63,6 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     const q = new Queue({ redis, namespace: `${namespace}:restart` });
 
-    // Enqueue jobs
     await q.add({ groupId: 'restart-group', data: { phase: 'before' } });
 
     const processed: string[] = [];
@@ -90,30 +76,26 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     worker.run();
 
-    // Wait for initial processing
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    // Simulate server restart by disconnecting all connections
     await redis.disconnect();
 
-    // Wait during "restart"
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    // Reconnect and add more jobs
     await redis.connect();
     await q.add({ groupId: 'restart-group', data: { phase: 'after' } });
 
-    // Wait for recovery
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     expect(processed).toContain('before');
     expect(processed).toContain('after');
 
     await worker.close();
-    await redis.quit();
+    await q.close();
+    try { await redis.quit(); } catch { }
   });
 
-  it('应当处理网络分区和阻塞操作 (should handle network partitions and blocking operations)', async () => {
+  test('应当处理网络分区和阻塞操作 (should handle network partitions and blocking operations)', async ({ namespace }) => {
     const redis = createRedis({
       connectTimeout: 1000,
       commandTimeout: 2000,
@@ -126,7 +108,7 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     const worker = new Worker({
       queue: q,
-      blockingTimeoutSec: 1, // Test blocking operations during network issues
+      blockingTimeoutSec: 1,
       handler: async (job) => {
         processed.push(job.data.id);
       },
@@ -137,14 +119,11 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     worker.run();
 
-    // Add job and let it process
     await q.add({ groupId: 'partition-group', data: { id: 1 } });
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    // Simulate network partition
     await redis.disconnect();
 
-    // Try to add job during partition using separate connection
     const redis2 = createRedis();
     const q2 = new Queue({
       redis: redis2,
@@ -152,31 +131,29 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
     });
     await q2.add({ groupId: 'partition-group', data: { id: 2 } });
 
-    // Wait during partition
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // Reconnect original redis
     await redis.connect();
 
-    // Wait for the queue to be empty or timeout after 10 seconds
     const startWait = Date.now();
     while (processed.length < 2 && Date.now() - startWait < 10000) {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
     expect(processed).toContain(1);
-    // Note: Job 2 may not be processed if the worker's connection is in a bad state after disconnect
-    // This is acceptable as forced disconnects are rare edge cases
     if (processed.length >= 2) {
       expect(processed).toContain(2);
     }
 
     await worker.close();
-    await redis.quit();
-    await redis2.quit();
+    await q.close();
+    await q2.close();
+    try { await redis.quit(); } catch { }
+    try { await redis2.quit(); } catch { }
   });
 
-  it('应当在 Redis 故障期间保持任务状态一致性 (should maintain job state consistency during Redis failures)', async () => {
+
+  test('应当在 Redis 故障期间保持任务状态一致性 (should maintain job state consistency during Redis failures)', async ({ namespace }) => {
     const redis = createRedis();
     const q = new Queue({
       redis,
@@ -184,7 +161,6 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
       jobTimeoutMs: 500,
     });
 
-    // Enqueue jobs
     await q.add({ groupId: 'consistency-group', data: { id: 1 } });
     await q.add({ groupId: 'consistency-group', data: { id: 2 } });
 
@@ -197,11 +173,9 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
       handler: async (job) => {
         if (job.data.id === 1 && !processingJob1) {
           processingJob1 = true;
-          // Simulate disconnect during job processing
           await redis.disconnect();
           await new Promise((resolve) => setTimeout(resolve, 300));
           await redis.connect();
-          // Job should be reclaimed after visibility timeout
           throw new Error('Simulated failure during disconnect');
         }
         processed.push(job.data.id);
@@ -212,19 +186,17 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     await q.waitForEmpty();
 
-    // Job 1 should be retried after visibility timeout expires
-    // Job 2 should be processed normally
     expect(processed.length).toBeGreaterThan(0);
 
     await worker.close();
-    await redis.quit();
+    await q.close();
+    try { await redis.quit(); } catch { }
   });
 
-  it('应当处理 Redis 内存压力和连接限制 (should handle Redis memory pressure and connection limits)', async () => {
+  test('应当处理 Redis 内存压力和连接限制 (should handle Redis memory pressure and connection limits)', async ({ namespace }) => {
     const connections: Redis[] = [];
 
     try {
-      // Create many connections to test connection pooling
       for (let i = 0; i < 10; i++) {
         const redis = createRedis({
           maxRetriesPerRequest: 1,
@@ -239,7 +211,6 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
         jobTimeoutMs: 1000,
       });
 
-      // Enqueue many small jobs
       const jobPromises = [];
       for (let i = 0; i < 100; i++) {
         jobPromises.push(
@@ -254,14 +225,12 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
       const processed: number[] = [];
       const workers: Worker<any>[] = [];
 
-      // Create multiple workers
       for (let i = 0; i < 3; i++) {
         const worker = new Worker({
           queue: q,
           blockingTimeoutSec: 1,
           handler: async (job) => {
             processed.push(job.data.id);
-            // Simulate some work
             await new Promise((resolve) => setTimeout(resolve, 10));
           },
         });
@@ -269,22 +238,20 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
         worker.run();
       }
 
-      // Wait for processing
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      expect(processed.length).toBeGreaterThan(50); // Should process most jobs
+      expect(processed.length).toBeGreaterThan(50);
 
-      // Stop all workers
       await Promise.all(workers.map((w) => w.close()));
+      await q.close();
     } finally {
-      // Cleanup connections
-      await Promise.all(connections.map((redis) => redis.quit()));
+      for (const redis of connections) {
+        try { await redis.quit(); } catch { }
+      }
     }
   });
 
-  it('应当优雅地处理 Redis AUTH 故障 (should handle Redis AUTH failures gracefully)', async () => {
-    // This test assumes Redis is running without AUTH
-    // In a real scenario, you'd test with wrong credentials
+  test('应当优雅地处理 Redis AUTH 故障 (should handle Redis AUTH failures gracefully)', async ({ namespace }) => {
     const redis = createRedis({
       connectTimeout: 1000,
       maxRetriesPerRequest: 2,
@@ -292,7 +259,6 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     const q = new Queue({ redis, namespace: `${namespace}:auth` });
 
-    // This should work normally since we're using correct connection
     await q.add({ groupId: 'auth-group', data: { test: 'auth' } });
 
     const processed: string[] = [];
@@ -316,10 +282,7 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
     expect(processed).toContain('auth');
 
     await worker.close();
-    await redis.quit();
+    await q.close();
+    try { await redis.quit(); } catch { }
   });
 });
-
-async function _wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

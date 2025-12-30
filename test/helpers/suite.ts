@@ -15,7 +15,7 @@ interface GroupMQFixtures {
   redis: Redis;
 
   // 工厂方法 (会自动清理创建的资源)
-  createQueue: (options?: Partial<QueueOptions>) => Queue;
+  createQueue: <T = any>(options?: Partial<QueueOptions>) => Queue<T>;
   // 修复：WorkerOptions 需要泛型参数，使用 any 兼容所有情况
   createWorker: <T = any>(options: WorkerOptions<T>) => Worker<T>;
 
@@ -65,13 +65,17 @@ export const test = base.extend<GroupMQFixtures>({
       try {
         await item.close();
       } catch (err) {
-        console.warn('Error closing queue in fixture:', err);
+        // 忽略关闭错误（连接可能已关闭）
       }
     }
 
-    // 清理 Redis 数据
-    const keys = await redis.keys(`groupmq:${namespace}*`);
-    if (keys.length) await redis.del(keys);
+    // 清理 Redis 数据（忽略连接已关闭的错误）
+    try {
+      const keys = await redis.keys(`groupmq:${namespace}*`);
+      if (keys.length) await redis.del(keys);
+    } catch (err) {
+      // 忽略清理错误（连接可能已关闭）
+    }
   },
 
   // 4. Worker 工厂与自动清理
@@ -92,7 +96,7 @@ export const test = base.extend<GroupMQFixtures>({
       try {
         await item.close();
       } catch (err) {
-        console.warn('Error closing worker in fixture:', err);
+        // 忽略关闭错误（连接可能已关闭）
       }
     }
   },

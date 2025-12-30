@@ -1,34 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
 
 describe('自动批处理 - 简单批处理', () => {
-  let redisCleanup: any;
-
-  afterAll(async () => {
-    // Clean up with a fresh connection
-    redisCleanup = createRedis();
-    const keys = await redisCleanup.keys('groupmq:test-autobatch-simple:*');
-    if (keys.length > 0) {
-      await redisCleanup.del(...keys);
-    }
-    await redisCleanup.quit();
-  });
-
-  it('应在启用 autoBatch 时添加任务', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-simple:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-simple',
-      autoBatch: true,
-    });
+  test('应在启用 autoBatch 时添加任务', async ({ createQueue }) => {
+    const queue = createQueue({ autoBatch: true });
 
     // Add 5 jobs
     const jobs = await Promise.all([
@@ -56,28 +30,13 @@ describe('自动批处理 - 简单批处理', () => {
     const waitingCount = await queue.getWaitingCount();
     console.log('Waiting count:', waitingCount);
     expect(waitingCount).toBe(5);
-
-    await queue.close();
   }, 10000);
 
-  it('应处理批处理任务', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-simple:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-simple',
-      autoBatch: true,
-    });
-
+  test('应处理批处理任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ autoBatch: true });
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push(job.id);
@@ -97,25 +56,10 @@ describe('自动批处理 - 简单批处理', () => {
 
     console.log('Processed:', processed.length);
     expect(processed.length).toBe(10);
-
-    await worker.close();
-    await queue.close();
   }, 10000);
 
-  it('无 autoBatch 时应正常工作（基准测试）', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-simple:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-simple',
-      // No autoBatch
-    });
+  test('无 autoBatch 时应正常工作（基准测试）', async ({ createQueue }) => {
+    const queue = createQueue(); // No autoBatch
 
     // Add 5 jobs
     const jobs = await Promise.all([
@@ -136,38 +80,14 @@ describe('自动批处理 - 简单批处理', () => {
     // Verify jobs are in Redis
     const waitingCount = await queue.getWaitingCount();
     expect(waitingCount).toBe(5);
-
-    await queue.close();
   }, 10000);
 });
 
 describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
-  let redisCleanup: any;
-
-  afterAll(async () => {
-    // Clean up with a fresh connection
-    redisCleanup = createRedis();
-    const keys = await redisCleanup.keys('groupmq:test-autobatch-ordering:*');
-    if (keys.length > 0) {
-      await redisCleanup.del(...keys);
-    }
-    await redisCleanup.quit();
-  });
-
-  it('应尊重 autoBatch + orderingDelayMs 下的任务排序', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-ordering:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-ordering',
-      autoBatch: true, // Enable batching
-      orderingDelayMs: 200, // Wait 200ms to ensure ordering
+  test('应尊重 autoBatch + orderingDelayMs 下的任务排序', async ({ redis, namespace, createQueue, createWorker }) => {
+    const queue = createQueue({
+      autoBatch: true,
+      orderingDelayMs: 200,
     });
 
     const processed: Array<{
@@ -176,7 +96,7 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
       orderMs: number;
     }> = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as any;
@@ -213,9 +133,7 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     );
 
     // Check that jobs are in staged status initially
-    const stagedCount = await redis.zcard(
-      'groupmq:test-autobatch-ordering:stage',
-    );
+    const stagedCount = await redis.zcard(`groupmq:${namespace}:stage`);
     console.log('Jobs in staging:', stagedCount);
     expect(stagedCount).toBe(20);
 
@@ -241,30 +159,17 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     console.log(
       '✅ All jobs processed in correct order with batching + staging!',
     );
-
-    await worker.close();
-    await queue.close();
   }, 15000);
 
-  it('应处理混合的暂存和即时任务', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-ordering:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-ordering',
+  test('应处理混合的暂存和即时任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
       autoBatch: true,
       orderingDelayMs: 200,
     });
 
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push(job.id);
@@ -302,30 +207,17 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     console.log('All jobs processed:', processed.length);
 
     console.log('✅ Mixed immediate and staged jobs with batching works!');
-
-    await worker.close();
-    await queue.close();
   }, 15000);
 
-  it('应使用 orderingDelayMs 批处理多个组', async () => {
-    const redis = createRedis();
-
-    // Clean up first
-    const keys = await redis.keys('groupmq:test-autobatch-ordering:*');
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    const queue = new Queue({
-      redis,
-      namespace: 'test-autobatch-ordering',
-      autoBatch: { size: 20, maxWaitMs: 50 }, // Large batch
+  test('应使用 orderingDelayMs 批处理多个组', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
+      autoBatch: { size: 20, maxWaitMs: 50 },
       orderingDelayMs: 100,
     });
 
     const processed: Record<string, number[]> = {};
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as any;
@@ -385,8 +277,5 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     }
 
     console.log('✅ Multiple groups batched and ordered correctly!');
-
-    await worker.close();
-    await queue.close();
   }, 15000);
 });

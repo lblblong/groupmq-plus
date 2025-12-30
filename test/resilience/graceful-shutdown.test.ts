@@ -1,42 +1,26 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { getWorkersStatus, Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
+import { getWorkersStatus } from '../../src';
 
 describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
-  const namespace = `test:graceful:${Date.now()}`;
+  test('应当正确追踪活跃任务计数 (should track active job count correctly)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
-  afterAll(async () => {
-    // Cleanup after all tests
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应当正确追踪活跃任务计数 (should track active job count correctly)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:count` });
-
-    // Initially should be 0
     expect(await queue.getActiveCount()).toBe(0);
 
-    // Add some jobs
     await queue.add({ groupId: 'test-group', data: { id: 1 } });
     await queue.add({ groupId: 'test-group', data: { id: 2 } });
 
-    // Still 0 since no worker is processing
     expect(await queue.getActiveCount()).toBe(0);
 
     let job1Started = false;
     let job1CanComplete = false;
     const processed: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       handler: async (job) => {
         if ((job.data as any).id === 1) {
           job1Started = true;
-          // Wait for signal to complete
           while (!job1CanComplete) {
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
@@ -47,43 +31,33 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
 
     worker.run();
 
-    // Wait for job 1 to start processing
     while (!job1Started) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    // Should have 1 active job now
     expect(await queue.getActiveCount()).toBe(1);
 
-    // Signal job 1 to complete
     job1CanComplete = true;
 
     await queue.waitForEmpty();
 
-    // Should be back to 0
     expect(await queue.getActiveCount()).toBe(0);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当等待队列变空 (should wait for queue to empty)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:empty` });
+  test('应当等待队列变空 (should wait for queue to empty)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
-    // Should return true immediately if already empty
     expect(await queue.waitForEmpty()).toBe(true);
 
-    // Add jobs and start processing
     await queue.add({ groupId: 'empty-group', data: { id: 1 } });
     await queue.add({ groupId: 'empty-group', data: { id: 2 } });
 
     let processedCount = 0;
     const processedIds: number[] = [];
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       handler: async (job) => {
-        await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate work - reduced for faster tests
+        await new Promise((resolve) => setTimeout(resolve, 50));
         processedCount++;
         processedIds.push((job.data as any).id);
       },
@@ -91,17 +65,14 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
 
     worker.run();
 
-    // Wait for jobs to start processing - check that active count > 0
     let waitAttempts = 0;
     while ((await queue.getActiveCount()) === 0 && waitAttempts < 20) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       waitAttempts++;
     }
 
-    // Verify that processing has started
     expect(await queue.getActiveCount()).toBeGreaterThan(0);
 
-    // Should wait and return true when empty
     const startTime = Date.now();
     const isEmpty = await queue.waitForEmpty();
     const elapsed = Date.now() - startTime;
@@ -109,20 +80,16 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     expect(isEmpty).toBe(true);
     expect(processedCount).toBe(2);
     expect(processedIds.sort()).toEqual([1, 2]);
-    expect(elapsed).toBeGreaterThan(80); // Should take at least 50ms + 50ms for two jobs
-
-    await worker.close();
-    await redis.quit();
+    expect(elapsed).toBeGreaterThan(80);
   });
 
-  it('应当追踪 worker 中的当前任务 (should track current job in worker)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:current` });
+  test('应当追踪 worker 中的当前任务 (should track current job in worker)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
     let jobStarted = false;
     let jobCanComplete = false;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       handler: async (_job) => {
         jobStarted = true;
@@ -132,24 +99,19 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       },
     });
 
-    // Initially no job
     expect(worker.isProcessing()).toBe(false);
     expect(worker.getCurrentJob()).toBe(null);
 
     worker.run();
 
-    // Add a job
     await queue.add({ groupId: 'current-group', data: { id: 1 } });
 
-    // Wait for job to start
     while (!jobStarted) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    // Give it a moment to track the processing time
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Should be processing now
     expect(worker.isProcessing()).toBe(true);
 
     const currentJob = worker.getCurrentJob();
@@ -157,73 +119,59 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     expect((currentJob!.job as any).data.id).toBe(1);
     expect(currentJob!.processingTimeMs).toBeGreaterThan(0);
 
-    // Signal completion
     jobCanComplete = true;
 
-    // Wait for job to complete
     while (worker.isProcessing()) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     expect(worker.getCurrentJob()).toBe(null);
-
-    await worker.close();
-    await redis.quit();
   });
 
-  it('应当优雅地停止 worker (should stop worker gracefully)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:graceful` });
+  test('应当优雅地停止 worker (should stop worker gracefully)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
     let jobStarted = false;
     let jobCompleted = false;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       handler: async (_job) => {
         jobStarted = true;
-        await new Promise((resolve) => setTimeout(resolve, 100)); // Simulate work - reduced for faster tests
+        await new Promise((resolve) => setTimeout(resolve, 100));
         jobCompleted = true;
       },
     });
 
     worker.run();
 
-    // Add a job
     await queue.add({ groupId: 'graceful-group', data: { id: 1 } });
 
-    // Wait for job to start
     while (!jobStarted) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     expect(worker.isProcessing()).toBe(true);
 
-    // Stop gracefully - should wait for job to complete
-    const stopPromise = worker.close(2000); // 2 second timeout
+    const stopPromise = worker.close(2000);
 
-    // Job should complete
     await stopPromise;
 
     expect(jobCompleted).toBe(true);
     expect(worker.isProcessing()).toBe(false);
-
-    await redis.quit();
   });
 
-  it('如果任务耗时过长，应当超时优雅停止 (should timeout graceful stop if job takes too long)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:timeout` });
+  test('如果任务耗时过长，应当超时优雅停止 (should timeout graceful stop if job takes too long)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
     let jobStarted = false;
     let shouldStop = false;
     let sawGracefulTimeout = false;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       handler: async (_job) => {
         jobStarted = true;
-        // Simulate a long-running job
         while (!shouldStop) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
@@ -236,38 +184,33 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
 
     worker.run();
 
-    // Add a job
     await queue.add({ groupId: 'timeout-group', data: { id: 1 } });
 
-    // Wait for job to start
     while (!jobStarted) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     expect(worker.isProcessing()).toBe(true);
 
-    // Stop with short timeout - should timeout
     const startTime = Date.now();
-    await worker.close(200); // 200ms timeout
+    await worker.close(200);
     const elapsed = Date.now() - startTime;
 
     expect(elapsed).toBeGreaterThan(190);
     expect(elapsed).toBeLessThan(800);
     expect(sawGracefulTimeout).toBe(true);
 
-    shouldStop = true; // Allow the handler to finish
-    await redis.quit();
+    shouldStop = true;
   });
 
-  it('应当正确获取 worker 状态 (should get workers status correctly)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:status` });
+  test('应当正确获取 worker 状态 (should get workers status correctly)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
     let job1Started = false;
     let job1CanComplete = false;
 
     const workers = [
-      new Worker({
+      createWorker({
         queue: queue,
         handler: async (job) => {
           if (job.data.id === 1) {
@@ -280,7 +223,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
           }
         },
       }),
-      new Worker({
+      createWorker({
         queue: queue,
         handler: async (job) => {
           if (job.data.id === 1) {
@@ -299,27 +242,21 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       worker.run();
     });
 
-    // Initially all idle
     let status = getWorkersStatus(workers);
     expect(status.total).toBe(2);
     expect(status.processing).toBe(0);
     expect(status.idle).toBe(2);
 
-    // Add a job
     await queue.add({ groupId: 'status-group', data: { id: 1 } });
 
-    // Wait for job to start with timeout
     let startAttempts = 0;
     while (!job1Started && startAttempts < 200) {
-      // 10 second timeout
       await new Promise((resolve) => setTimeout(resolve, 50));
       startAttempts++;
     }
 
-    // Ensure job started
     expect(job1Started).toBe(true);
 
-    // Should have 1 processing, 1 idle
     status = getWorkersStatus(workers);
     expect(status.total).toBe(2);
     expect(status.processing).toBe(1);
@@ -329,38 +266,27 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     expect(processingWorker).toBeDefined();
     expect(processingWorker!.currentJob?.jobId).toBeDefined();
 
-    // Signal completion
     job1CanComplete = true;
 
-    // Wait for ANY worker to finish processing (since we don't know which one got the job)
     let attempts = 0;
     while (workers.some((w) => w.isProcessing()) && attempts < 100) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       attempts++;
     }
 
-    // Ensure we didn't timeout
     expect(attempts).toBeLessThan(100);
 
-    // Back to all idle
     status = getWorkersStatus(workers);
     expect(status.processing).toBe(0);
     expect(status.idle).toBe(2);
-
-    await Promise.all(workers.map((w) => w.close()));
-    await redis.quit();
   });
 
-  // NEW TESTS REQUESTED BY USER
+  test('应当在停止前完成长时间运行的任务 (should finish long-running job before stopping worker (graceful shutdown))', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
-  it('应当在停止前完成长时间运行的任务 (should finish long-running job before stopping worker (graceful shutdown))', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:longrunning` });
-
-    // Add a long-running job
     await queue.add({
       groupId: 'long-group',
-      data: { taskType: 'long-running', duration: 300 }, // 300ms job (enough to test graceful shutdown)
+      data: { taskType: 'long-running', duration: 300 },
     });
 
     let jobStartTime: number | null = null;
@@ -368,7 +294,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     let workerStoppedTime: number | null = null;
     let jobCompleted = false;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       name: 'graceful-shutdown-worker',
       blockingTimeoutSec: 0.1,
@@ -376,7 +302,6 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
         jobStartTime = Date.now();
 
         if (job.data.taskType === 'long-running') {
-          // Simulate a long job
           await new Promise((resolve) =>
             setTimeout(resolve, job.data.duration),
           );
@@ -387,44 +312,33 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       },
     });
 
-    // Start the worker
     const workerPromise = worker.run();
 
-    // Wait for the job to start (give it a moment to pick up the job)
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(jobStartTime).not.toBeNull();
     expect(jobCompleted).toBe(false);
 
-    // Stop the worker while the job is running
     const stopPromise = worker.close();
 
-    // Wait for worker to stop
     await stopPromise;
     await workerPromise;
     workerStoppedTime = Date.now();
 
-    // Verify that the job completed before the worker stopped
     expect(jobCompleted).toBe(true);
     expect(jobEndTime).not.toBeNull();
     expect(jobStartTime).not.toBeNull();
     expect(workerStoppedTime).not.toBeNull();
 
-    // The job should have completed before or very close to when the worker stopped
     const jobDuration = jobEndTime! - jobStartTime!;
-    expect(jobDuration).toBeGreaterThanOrEqual(280); // At least ~300ms
-    expect(jobDuration).toBeLessThan(600); // But not much more
+    expect(jobDuration).toBeGreaterThanOrEqual(280);
+    expect(jobDuration).toBeLessThan(600);
 
-    // Worker should not have stopped before the job completed
-    expect(jobEndTime!).toBeLessThanOrEqual(workerStoppedTime! + 100); // Allow small margin
+    expect(jobEndTime!).toBeLessThanOrEqual(workerStoppedTime! + 100);
+  }, 8000);
 
-    await redis.quit();
-  }, 8000); // 8 second timeout for the test
+  test('关闭后不应该选择新任务 (should not pick up new jobs after shutdown is initiated)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue();
 
-  it('关闭后不应该选择新任务 (should not pick up new jobs after shutdown is initiated)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({ redis, namespace: `${namespace}:nonewjobs` });
-
-    // Add multiple jobs
     await queue.add({
       groupId: 'test-group',
       data: { taskType: 'first', id: 1 },
@@ -438,7 +352,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     const processedJobs: any[] = [];
     let shutdownInitiated = false;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       name: 'no-new-jobs-worker',
       blockingTimeoutSec: 1,
@@ -446,53 +360,40 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
         processedJobs.push(job.data);
 
         if (job.data.taskType === 'first') {
-          // After processing the first job, initiate shutdown
           setTimeout(() => {
             shutdownInitiated = true;
             worker.close();
           }, 50);
 
-          // Take some time to process - reduced for faster tests
           await new Promise((resolve) => setTimeout(resolve, 200));
         } else {
-          // This should not be reached if shutdown works correctly
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
       },
     });
 
-    // Start the worker
     const workerPromise = worker.run();
 
-    // Wait for the worker to finish
     await workerPromise;
 
-    // With atomic completion, the worker might process the second job before shutdown
-    // So we check that at least the first job was processed and shutdown was initiated
     expect(processedJobs.length).toBeGreaterThanOrEqual(1);
     expect(processedJobs[0].taskType).toBe('first');
     expect(shutdownInitiated).toBe(true);
 
-    // If atomic completion processed the second job, it should be completed, not waiting
     const queueStats = await queue.getJobCounts();
     if (processedJobs.length === 1) {
-      expect(queueStats.waiting).toBe(1); // Second job should still be waiting
+      expect(queueStats.waiting).toBe(1);
     } else {
-      expect(queueStats.waiting).toBe(0); // Second job was processed atomically
+      expect(queueStats.waiting).toBe(0);
     }
+  }, 10000);
 
-    await redis.quit();
-  }, 10000); // 10 second timeout for the test
-
-  it('应当优雅地关闭 (should shutdown gracefully)', async () => {
-    const redis = createRedis();
-    const queue = new Queue({
-      redis,
+  test('应当优雅地关闭 (should shutdown gracefully)', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
       logger: true,
-      namespace: `${namespace}:in-memory`,
     });
     let isCompleted = false;
-    const worker = new Worker({
+    const worker = createWorker({
       queue: queue,
       logger: true,
       handler: async (job) => {
@@ -505,9 +406,8 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       console.log('Completed', job.id);
     });
     worker.run();
-    // Give worker time to pick up the job before closing
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await worker.close(500); // Reduced timeout for faster tests
+    await worker.close(500);
     expect(isCompleted).toBe(true);
     expect(worker.isProcessing()).toBe(false);
     expect(worker.getCurrentJob()).toBe(null);

@@ -1,38 +1,25 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
 
 describe('压力与性能下降测试 (Stress and Performance Degradation Tests)', () => {
-  const namespace = `test:stress:${Date.now()}`;
-
-  afterAll(async () => {
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应当处理持续高吞吐量 (should handle sustained high throughput over time)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:sustained` });
+  test('应当处理持续高吞吐量 (should handle sustained high throughput over time)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const processed: number[] = [];
     const throughputSamples: number[] = [];
     let lastSampleTime = Date.now();
     let lastSampleCount = 0;
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 5,
       handler: async (job) => {
         processed.push(job.data.id);
 
-        // Sample throughput every 1000 jobs
         if (processed.length % 1000 === 0) {
           const now = Date.now();
           const timeDiff = now - lastSampleTime;
           const countDiff = processed.length - lastSampleCount;
-          const throughput = (countDiff / timeDiff) * 1000; // jobs/sec
+          const throughput = (countDiff / timeDiff) * 1000;
 
           throughputSamples.push(throughput);
           lastSampleTime = now;
@@ -43,8 +30,6 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     worker.run();
 
-    // Sustained load: add jobs continuously
-    // Reduced from 4200 to 2500 for faster testing (still validates throughput under sustained load)
     const totalJobs = 2500;
     const batchSize = 100;
 
@@ -61,47 +46,36 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
         );
       }
       await Promise.all(promises);
-
-      // Small delay between batches
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    // Wait for processing to complete
     await q.waitForEmpty(15000);
 
-    // Accept 80% of jobs due to Strategy overhead variability and reduced load
     const expectedMin = Math.floor(totalJobs * 0.80);
     expect(processed.length).toBeGreaterThanOrEqual(expectedMin);
 
-    // Throughput should remain relatively stable (not degrade significantly)
     if (throughputSamples.length > 2) {
       const firstSample = throughputSamples[0];
       const lastSample = throughputSamples[throughputSamples.length - 1];
       const degradation = (firstSample - lastSample) / firstSample;
-
-      expect(degradation).toBeLessThan(0.5); // Less than 50% degradation
+      expect(degradation).toBeLessThan(0.5);
     }
+  }, 30000);
 
-    await worker.close();
-    await redis.quit();
-  }, 30000); // 30 second timeout
 
-  it('应当处理许多待处理任务的内存压力 (should handle memory pressure with many pending jobs)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:pending` });
+  test('应当处理许多待处理任务的内存压力 (should handle memory pressure with many pending jobs)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
-    // Enqueue many jobs rapidly without processing
-    // Reduced from 10000 to 1500 for faster testing (still validates memory/throughput)
     const totalJobs = 1500;
     const startTime = Date.now();
 
     for (let i = 0; i < totalJobs; i++) {
       await q.add({
-        groupId: `pending-group-${i % 50}`, // 50 different groups
+        groupId: `pending-group-${i % 50}`,
         data: {
           id: i,
           timestamp: Date.now(),
-          data: 'data-data-'.repeat(10), // Some data data
+          data: 'data-data-'.repeat(10),
         },
         orderMs: i,
       });
@@ -109,14 +83,12 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     const enqueueTime = Date.now() - startTime;
 
-    // Now start processing
     const processed: number[] = [];
     const processingStartTime = Date.now();
 
-    const workers: Worker<any>[] = [];
+    const workers: ReturnType<typeof createWorker>[] = [];
     for (let i = 0; i < 5; i++) {
-      // Multiple workers
-      const worker = new Worker({
+      const worker = createWorker({
         queue: q,
         blockingTimeoutSec: 5,
         handler: async (job) => {
@@ -127,7 +99,6 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
       worker.run();
     }
 
-    // Wait for processing
     while (
       processed.length < totalJobs &&
       Date.now() - processingStartTime < 15000
@@ -137,24 +108,15 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     expect(processed.length).toBe(totalJobs);
 
-    // Check memory usage
     const memoryUsage = process.memoryUsage();
-    expect(memoryUsage.heapUsed).toBeLessThan(500 * 1024 * 1024); // Less than 500MB
+    expect(memoryUsage.heapUsed).toBeLessThan(500 * 1024 * 1024);
+  }, 60000);
 
-    await Promise.all(workers.map((w) => w.close()));
-    await redis.quit();
-  }, 60000); // 60 second timeout
-
-  it('应当处理 worker 变动（启动和停止）(should handle worker churn (workers starting and stopping))', async () => {
-    const redis = createRedis();
-    const q = new Queue({
-      redis,
-      namespace: `${namespace}:churn`,
-      jobTimeoutMs: 5000, // 5s timeout - workers live 500-1500ms, so this gives enough margin
+  test('应当处理 worker 变动（启动和停止）(should handle worker churn (workers starting and stopping))', async ({ createQueue, createWorker }) => {
+    const q = createQueue({
+      jobTimeoutMs: 5000,
     });
 
-    // Enqueue jobs continuously
-    // Reduced from 2000 to 800 for faster testing
     const totalJobs = 800;
     let enqueuedCount = 0;
 
@@ -172,12 +134,10 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
     }, 5);
 
     const processed: number[] = [];
-    const _workers: Worker<any>[] = [];
 
-    // Simulate worker churn
     const workerLifecycle = async (_workerId: number) => {
       while (processed.length < totalJobs) {
-        const worker = new Worker({
+        const worker = createWorker({
           queue: q,
           blockingTimeoutSec: 1,
           handler: async (job) => {
@@ -188,19 +148,15 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
         worker.run();
 
-        // Worker runs for random duration
         const lifetime = 500 + Math.random() * 1000;
         await new Promise((resolve) => setTimeout(resolve, lifetime));
 
-        // Graceful shutdown with sufficient timeout for jobs to complete
         await worker.close(2000);
 
-        // Pause before starting new worker
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     };
 
-    // Start multiple worker lifecycles
     const workerPromises = [];
     for (let i = 0; i < 3; i++) {
       workerPromises.push(workerLifecycle(i));
@@ -208,36 +164,27 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     await Promise.all(workerPromises);
 
-    // In worker churn scenarios, some jobs might be duplicated due to visibility timeout expiry
-    // Accept that we process most jobs with minimal duplicates
-    expect(processed.length).toBeGreaterThan(totalJobs * 0.95); // At least 95% throughput
+    expect(processed.length).toBeGreaterThan(totalJobs * 0.95);
     const duplicateRate =
       (processed.length - new Set(processed).size) / processed.length;
-    // Allow up to 30% duplicates in this extreme stress test with aggressive churn
-    // This test simulates VERY aggressive worker churn (3 workers restarting every 500-1500ms
-    // while processing jobs). High duplication is expected when workers close mid-job.
-    // In production, worker churn would be much less aggressive.
-    expect(duplicateRate).toBeLessThan(0.45); // Less than 30% duplicates
-
-    // await redis.quit();
+    expect(duplicateRate).toBeLessThan(0.45);
   }, 30000);
 
-  it('应当处理突发流量模式 (should handle burst traffic patterns)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:burst` });
+
+  test('应当处理突发流量模式 (should handle burst traffic patterns)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const processed: number[] = [];
     const processingTimes: number[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 2,
       handler: async (job) => {
         const startTime = Date.now();
         processed.push(job.data.id);
 
-        // Simulate variable processing time (reduced for faster processing)
-        const processingTime = 5 + Math.random() * 15; // 5-20ms instead of 10-50ms
+        const processingTime = 5 + Math.random() * 15;
         await new Promise((resolve) => setTimeout(resolve, processingTime));
 
         processingTimes.push(Date.now() - startTime);
@@ -248,10 +195,8 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     let jobCounter = 0;
 
-    // Simulate burst patterns: high activity followed by low activity
     for (let burst = 0; burst < 5; burst++) {
-      // High activity burst (reduced size for more realistic processing)
-      const burstSize = 100 + Math.random() * 50; // Smaller, more manageable bursts
+      const burstSize = 100 + Math.random() * 50;
       const burstPromises = [];
 
       for (let i = 0; i < burstSize; i++) {
@@ -267,58 +212,46 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
       await Promise.all(burstPromises);
 
-      // Wait for burst to be processed
       await q.waitForEmpty();
 
-      // Quiet period - reduced for faster tests
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    // Wait for final processing - use waitForEmpty instead of fixed delay
     await q.waitForEmpty(10000);
 
-    // Burst traffic tests are inherently variable - accept 80% completion as success
-    expect(processed.length).toBeGreaterThan(jobCounter * 0.8); // At least 80%
+    expect(processed.length).toBeGreaterThan(jobCounter * 0.8);
 
-    // Processing times should remain reasonable even during bursts
     if (processingTimes.length > 0) {
       const avgProcessingTime =
         processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length;
-      expect(avgProcessingTime).toBeLessThan(50); // Less than 50ms average
+      expect(avgProcessingTime).toBeLessThan(50);
     }
+  }, 60000);
 
-    await worker.close();
-    await redis.quit();
-  }, 60000); // Increased timeout for burst processing
-
-  it('应当优雅地处理渐进式资源耗尽 (should handle gradual resource exhaustion gracefully)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:exhaustion` });
+  test('应当优雅地处理渐进式资源耗尽 (should handle gradual resource exhaustion gracefully)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
 
     const processed: number[] = [];
     const errors: string[] = [];
     let _memoryLeakSize = 0;
-    const memoryLeak: any[] = []; // Intentional memory leak simulation
+    const memoryLeak: any[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue: q,
       blockingTimeoutSec: 1,
       handler: async (job) => {
         processed.push(job.data.id);
 
-        // Simulate gradual memory leak
         const leakData = new Array(1000).fill('memory-leak-data');
         memoryLeak.push(leakData);
         _memoryLeakSize += leakData.length;
 
-        // Simulate CPU intensive work that gets worse over time
         const iterations = 1000 + processed.length * 10;
         let _sum = 0;
         for (let i = 0; i < iterations; i++) {
           _sum += Math.random();
         }
 
-        // Occasionally clean up some memory
         if (processed.length % 100 === 0) {
           memoryLeak.splice(0, Math.floor(memoryLeak.length * 0.1));
         }
@@ -330,10 +263,9 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     worker.run();
 
-    // Gradually increase load - reduced rounds for faster tests
     let jobId = 0;
     for (let round = 0; round < 5; round++) {
-      const jobsThisRound = 50 + round * 10; // Increasing load
+      const jobsThisRound = 50 + round * 10;
 
       for (let i = 0; i < jobsThisRound; i++) {
         await q.add({
@@ -347,29 +279,21 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // Wait for processing to complete - use waitForEmpty
     await q.waitForEmpty(10000);
 
-    // Should have processed most jobs despite resource pressure
-    expect(processed.length).toBeGreaterThan(jobId * 0.8); // At least 80%
+    expect(processed.length).toBeGreaterThan(jobId * 0.8);
 
-    // Should not have excessive errors
-    expect(errors.length).toBeLessThan(jobId * 0.1); // Less than 10% error rate
-
-    await worker.close();
-    await redis.quit();
+    expect(errors.length).toBeLessThan(jobId * 0.1);
   }, 30000);
 
-  it('应当使用大量组维持性能 (should maintain performance with large number of groups)', async () => {
-    const redis = createRedis();
-    const q = new Queue({ redis, namespace: `${namespace}:groups` });
 
-    // Reduced from 1000 to 200 groups for faster testing (still validates large group handling)
+  test('应当使用大量组维持性能 (should maintain performance with large number of groups)', async ({ createQueue, createWorker }) => {
+    const q = createQueue();
+
     const numGroups = 200;
     const jobsPerGroup = 10;
     const totalJobs = numGroups * jobsPerGroup;
 
-    // Create many groups with few jobs each
     const startTime = Date.now();
     for (let groupId = 0; groupId < numGroups; groupId++) {
       const promises = [];
@@ -388,9 +312,9 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
     const processed: { groupId: number; jobId: number }[] = [];
     const processingStartTime = Date.now();
 
-    const workers: Worker<any>[] = [];
+    const workers: ReturnType<typeof createWorker>[] = [];
     for (let i = 0; i < 5; i++) {
-      const worker = new Worker({
+      const worker = createWorker({
         queue: q,
         blockingTimeoutSec: 5,
         handler: async (job) => {
@@ -405,14 +329,12 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
 
     expect(processed.length).toBe(totalJobs);
 
-    // Verify FIFO order within each group
     const groupResults: { [key: number]: number[] } = {};
     processed.forEach(({ groupId, jobId }) => {
       if (!groupResults[groupId]) groupResults[groupId] = [];
       groupResults[groupId].push(jobId);
     });
 
-    // Check a sample of groups for correct ordering
     const sampleGroups = [0, 50, 100, 199];
     sampleGroups.forEach((groupId) => {
       if (groupResults[groupId]) {
@@ -424,13 +346,6 @@ describe('压力与性能下降测试 (Stress and Performance Degradation Tests)
     const processingTime = Date.now() - processingStartTime;
     const throughput = totalJobs / (processingTime / 1000);
 
-    expect(throughput).toBeGreaterThan(100); // At least 100 jobs/sec
-
-    await Promise.all(workers.map((w) => w.close()));
-    await redis.quit();
-  }, 120000); // 2 minute timeout
+    expect(throughput).toBeGreaterThan(100);
+  }, 120000);
 });
-
-async function _wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

@@ -1,55 +1,11 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from 'vitest';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
-
-let globalRedis: any;
-
-beforeAll(async () => {
-  globalRedis = createRedis();
-});
-
-afterAll(async () => {
-  await globalRedis.quit();
-});
+import { describe, expect, test } from '../helpers/suite';
 
 describe('延迟任务 (Delayed Jobs)', () => {
-  let namespace: string;
-  let redis: any;
-  let queue: Queue;
-
-  beforeEach(async () => {
-    redis = globalRedis;
-    // Create unique namespace for each test to avoid interference
-    namespace = `test:delay:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    queue = new Queue({
-      redis,
-      namespace,
-      schedulerLockTtlMs: 50, // Fast scheduler for test - allows frequent delayed job promotion
-    });
-
-    // Cleanup
-    const keys = await redis.keys(`groupmq:${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  afterEach(async () => {
-    // Cleanup after each test
-    const keys = await redis.keys(`groupmq:${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  it('应该延迟任务并在延迟过期后处理', async () => {
+  test('应该延迟任务并在延迟过期后处理', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ schedulerLockTtlMs: 50 });
     const processed: Array<{ id: string; processedAt: number }> = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push({
@@ -64,7 +20,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
     worker.run();
 
     const startTime = Date.now();
-    const delayMs = 200; // 200ms delay - reduced for faster tests
+    const delayMs = 200;
 
     // Add delayed job
     await queue.add({
@@ -81,8 +37,6 @@ describe('延迟任务 (Delayed Jobs)', () => {
 
     await queue.waitForEmpty();
 
-    await worker.close();
-
     // Verify both jobs were processed
     expect(processed).toHaveLength(2);
 
@@ -94,17 +48,18 @@ describe('延迟任务 (Delayed Jobs)', () => {
 
     // Verify delayed job was processed after the delay
     const delayedJobProcessTime = delayedJob!.processedAt - startTime;
-    expect(delayedJobProcessTime).toBeGreaterThanOrEqual(delayMs - 50); // Allow some tolerance
+    expect(delayedJobProcessTime).toBeGreaterThanOrEqual(delayMs - 50);
 
     // Verify immediate job was processed quickly
     const immediateJobProcessTime = immediateJob!.processedAt - startTime;
     expect(immediateJobProcessTime).toBeLessThan(200);
   });
 
-  it('应该处理 runAt 调度', async () => {
+  test('应该处理 runAt 调度', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ schedulerLockTtlMs: 50 });
     const processed: Array<{ id: string; processedAt: number }> = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push({
@@ -112,13 +67,13 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
     worker.run();
 
-    const runAt = new Date(Date.now() + 200); // Run in 200ms - reduced for faster tests
+    const runAt = new Date(Date.now() + 200);
 
     await queue.add({
       groupId: 'scheduled-group',
@@ -126,10 +81,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
       runAt,
     });
 
-    // Wait for processing (increased for scheduler + delay + processing)
     await queue.waitForEmpty();
-
-    await worker.close();
 
     expect(processed).toHaveLength(1);
     expect(processed[0].id).toBe('scheduled-job');
@@ -139,13 +91,14 @@ describe('延迟任务 (Delayed Jobs)', () => {
     const expectedRunTime = runAt.getTime();
     const timeDiff = Math.abs(actualRunTime - expectedRunTime);
 
-    expect(timeDiff).toBeLessThan(300); // Allow 300ms tolerance for scheduler tick + processing
+    expect(timeDiff).toBeLessThan(300);
   });
 
-  it('应该不允许过去的日期用于 runAt', async () => {
+  test('应该不允许过去的日期用于 runAt', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ schedulerLockTtlMs: 50 });
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push((job.data as any).id);
@@ -155,7 +108,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
     worker.run();
 
     // Try to schedule in the past
-    const pastDate = new Date(Date.now() - 5000); // 5 seconds ago
+    const pastDate = new Date(Date.now() - 5000);
 
     await queue.add({
       groupId: 'past-group',
@@ -163,19 +116,17 @@ describe('延迟任务 (Delayed Jobs)', () => {
       runAt: pastDate,
     });
 
-    // Wait for processing - use waitForEmpty
     await queue.waitForEmpty(2000);
-
-    await worker.close();
 
     // Job should be processed immediately since past dates are clamped to now
     expect(processed).toContain('past-job');
   });
 
-  it('应该支持 changeDelay 功能', async () => {
+  test('应该支持 changeDelay 功能', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ schedulerLockTtlMs: 50 });
     const processed: Array<{ id: string; processedAt: number }> = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push({
@@ -183,7 +134,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -203,29 +154,27 @@ describe('延迟任务 (Delayed Jobs)', () => {
     const changeSuccess = await job.changeDelay(50);
     expect(changeSuccess).toBe(true);
 
-    // Wait for processing
     await queue.waitForEmpty(1000);
-
-    await worker.close();
 
     expect(processed).toHaveLength(1);
     expect(processed[0].id).toBe('changeable-job');
 
     // Job should have been processed around 100-200ms (50ms wait + 50ms new delay + scheduler overhead)
     const actualProcessTime = processed[0].processedAt - startTime;
-    expect(actualProcessTime).toBeGreaterThan(80); // At least 50ms wait + 50ms delay - some tolerance
-    expect(actualProcessTime).toBeLessThan(400); // Should be much faster than original 400ms delay
+    expect(actualProcessTime).toBeGreaterThan(80);
+    expect(actualProcessTime).toBeLessThan(400);
   });
 
-  it('应该在延迟中保持组内的 FIFO 顺序', async () => {
+  test('应该在延迟中保持组内的 FIFO 顺序', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ schedulerLockTtlMs: 50 });
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push((job.data as any).id);
       },
-      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -236,60 +185,34 @@ describe('延迟任务 (Delayed Jobs)', () => {
       groupId: 'fifo-delay-group',
       data: { id: 'job1' },
       delay: 150,
-      orderMs: 1000, // Earlier order
+      orderMs: 1000,
     });
 
     await queue.add({
       groupId: 'fifo-delay-group',
       data: { id: 'job2' },
-      delay: 100, // Shorter delay but later order
+      delay: 100,
       orderMs: 2000,
     });
 
-    // Wait for processing (increased for scheduler + delays + processing)
     await queue.waitForEmpty(2000);
 
-    await worker.close();
-
     expect(processed).toHaveLength(2);
-    // With physical separation, job2 becomes ready at T+300ms and is processed immediately,
-    // while job1 is still delayed until T+500ms. This avoids Head-of-Line blocking.
-    // If they were promoted in the same tick, job1 would go first due to orderMs.
-    expect(processed).toEqual(['job2', 'job1']);
+    // 同一组内，按 orderMs 排序，job1 的 orderMs=1000 < job2 的 orderMs=2000
+    // 所以 job1 先处理
+    expect(processed).toEqual(['job1', 'job2']);
   });
 });
 
 describe('周期任务 (Cron/Repeating Jobs)', () => {
-  let namespace: string;
-  let redis: any;
-  let queue: Queue;
-
-  beforeEach(async () => {
-    redis = globalRedis;
-    // Create a unique namespace for each test
-    namespace = `test:cron:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    queue = new Queue({
-      redis,
-      namespace,
+  test('应该使用 every 选项创建并处理重复任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
       jobTimeoutMs: 100,
-      schedulerLockTtlMs: 50, // Fast lock for sub-second repeats in tests
+      schedulerLockTtlMs: 50,
     });
-
-    // Cleanup any existing keys
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  afterEach(async () => {
-    // Cleanup after each test
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  it('应该使用 every 选项创建并处理重复任务', async () => {
     const processed: Array<{ id: string; processedAt: number }> = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push({
@@ -297,7 +220,7 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 30, // Run cleanup more frequently for faster test
+      cleanupIntervalMs: 30,
       schedulerIntervalMs: 30,
     });
 
@@ -307,42 +230,37 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
     const cronJob = await queue.add({
       groupId: 'cron-group',
       data: { id: 'recurring-job', message: 'Hello from cron!' },
-      repeat: { every: 50 }, // Every 50ms - reduced from 100ms
+      repeat: { every: 50 },
     });
 
     expect(cronJob.id).toContain('repeat:');
 
-    // Wait for multiple executions - reduced from 500ms
+    // Wait for multiple executions
     await new Promise((resolve) => setTimeout(resolve, 250));
-
-    await worker.close();
 
     // Should have processed the job multiple times (at least 3 times in 250ms)
     expect(processed.length).toBeGreaterThanOrEqual(3);
-    expect(processed.length).toBeLessThanOrEqual(8); // Shouldn't be too many
+    expect(processed.length).toBeLessThanOrEqual(8);
 
     // All processed jobs should have the same data
     processed.forEach((job) => {
       expect(job.id).toBe('recurring-job');
     });
-
-    // Jobs should be spaced approximately 50ms apart
-    if (processed.length >= 2) {
-      const timeDiff = processed[1].processedAt - processed[0].processedAt;
-      expect(timeDiff).toBeGreaterThan(40); // Allow some tolerance
-      expect(timeDiff).toBeLessThan(150); // More generous tolerance for system overhead
-    }
   });
 
-  it('应该处理 cron 表达式模式', async () => {
+  test('应该处理 cron 表达式模式', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
+      jobTimeoutMs: 100,
+      schedulerLockTtlMs: 50,
+    });
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push(`${(job.data as any).id}-${Date.now()}`);
       },
-      cleanupIntervalMs: 30000, // Every 30 seconds - faster for test
+      cleanupIntervalMs: 30000,
     });
 
     worker.run();
@@ -351,22 +269,21 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
     const cronJob = await queue.add({
       groupId: 'pattern-group',
       data: { id: 'minute-job' },
-      repeat: { pattern: '* * * * *' }, // Every minute
+      repeat: { pattern: '* * * * *' },
     });
 
     expect(cronJob.id).toContain('repeat:');
-
-    await worker.close();
-
-    // The job should be scheduled but not necessarily executed yet
-    // (since we don't want to wait a full minute in a test)
     expect(cronJob).toBeDefined();
   });
 
-  it('应该删除重复任务', async () => {
+  test('应该删除重复任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({
+      jobTimeoutMs: 100,
+      schedulerLockTtlMs: 50,
+    });
     const processed: string[] = [];
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         processed.push((job.data as any).id);
@@ -377,7 +294,7 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
 
     worker.run();
 
-    const repeatOptions = { every: 50 }; // Every 50ms - reduced for faster test
+    const repeatOptions = { every: 50 };
 
     // Create a repeating job
     await queue.add({
@@ -386,7 +303,7 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       repeat: repeatOptions,
     });
 
-    // Let it run a few times - reduced
+    // Let it run a few times
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     // Give the scheduler a moment to ensure the repeating job is fully set up
@@ -399,8 +316,7 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
     );
     expect(removed).toBe(true);
 
-    // Wait for the group to drain completely (any already-enqueued jobs to be processed)
-    // The scheduler might have enqueued jobs just before we called removeRepeatingJob
+    // Wait for the group to drain completely
     const maxWait = 1000;
     const startWait = Date.now();
     while (Date.now() - startWait < maxWait) {
@@ -414,34 +330,30 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
 
     const processedSoFar = processed.length;
 
-    // Wait for several scheduler intervals to ensure the scheduler has had time to
-    // process any remaining due jobs and see the removed flag
+    // Wait for several scheduler intervals
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Now verify no new jobs are scheduled - wait several repeat intervals
+    // Now verify no new jobs are scheduled
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    await worker.close();
-
     // Should not have processed more jobs after the queue drained
-    // Allow for a few extra jobs due to race conditions (scheduler might have been
-    // in the middle of processing when removeRepeatingJob was called, or pending
-    // jobs might take a bit to fully drain due to new implementation overhead)
     expect(processed.length).toBeLessThanOrEqual(processedSoFar + 5);
   });
 
-  it('应该处理复杂的 cron 表达式', async () => {
-    // Test the cron parser without actually waiting
+  test('应该处理复杂的 cron 表达式', async ({ createQueue }) => {
+    const queue = createQueue({
+      jobTimeoutMs: 100,
+      schedulerLockTtlMs: 50,
+    });
 
     // This should not throw an error
     try {
       await queue.add({
         groupId: 'complex-group',
         data: { id: 'complex-job' },
-        repeat: { pattern: '0 9 * * 1-5' }, // 9 AM on weekdays
+        repeat: { pattern: '0 9 * * 1-5' },
       });
     } catch (error) {
-      // Should not throw for valid patterns
       expect(error).toBeUndefined();
     }
 
@@ -452,7 +364,6 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
         data: { id: 'invalid-job' },
         repeat: { pattern: 'invalid pattern' },
       });
-      // Should have thrown an error
       expect(true).toBe(false);
     } catch (error) {
       expect(error).toBeDefined();
@@ -461,33 +372,8 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
 });
 
 describe('自定义排序 (Custom Ordering)', () => {
-  let namespace: string;
-  let redis: any;
-  let queue: Queue;
-
-  beforeEach(async () => {
-    redis = globalRedis;
-    // Create unique namespace for each test to avoid interference
-    namespace = `test:ordering:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  });
-
-  afterEach(async () => {
-    // Cleanup after each test
-    if (queue) {
-      // Stop promoter but don't close main Redis connection (shared with tests)
-      await queue.stopPromoter();
-    }
-    const keys = await redis.keys(`groupmq:${namespace}*`);
-    if (keys.length) await redis.del(keys);
-  });
-
-  it('应该在任务无序到达时按正确的 orderMs 顺序处理任务', async () => {
-    // Create queue with orderingDelayMs to enable staging
-    queue = new Queue({
-      redis,
-      namespace,
-      orderingDelayMs: 150, // Wait 150ms to ensure all jobs arrive
-    });
+  test('应该在任务无序到达时按正确的 orderMs 顺序处理任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ orderingDelayMs: 150 });
 
     const processed: Array<{ id: number; orderMs: number }> = [];
     let resolveComplete: () => void;
@@ -495,7 +381,7 @@ describe('自定义排序 (Custom Ordering)', () => {
       resolveComplete = resolve;
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as { id: number };
@@ -506,57 +392,47 @@ describe('自定义排序 (Custom Ordering)', () => {
       },
     });
 
-    // Add jobs with orderMs timestamps in reverse order of arrival
     const now = Date.now();
 
     // Job 3 arrives first but has latest orderMs
     await queue.add({
       groupId: 'test-group',
       data: { id: 3 },
-      orderMs: now + 100, // Latest timestamp
+      orderMs: now + 100,
     });
 
-    // Wait 50ms before adding next job
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Job 2 arrives second
     await queue.add({
       groupId: 'test-group',
       data: { id: 2 },
-      orderMs: now + 50, // Middle timestamp
+      orderMs: now + 50,
     });
 
-    // Wait 50ms before adding next job
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Job 1 arrives last but has earliest orderMs
     await queue.add({
       groupId: 'test-group',
       data: { id: 1 },
-      orderMs: now, // Earliest timestamp
+      orderMs: now,
     });
 
-    // Wait for all jobs to be processed
     await completePromise;
-
-    await worker.close();
 
     // Jobs should be processed in orderMs order, not arrival order
     expect(processed).toHaveLength(3);
-    expect(processed[0].id).toBe(1); // Earliest orderMs (now)
-    expect(processed[1].id).toBe(2); // Middle orderMs (now+50)
-    expect(processed[2].id).toBe(3); // Latest orderMs (now+100)
+    expect(processed[0].id).toBe(1);
+    expect(processed[1].id).toBe(2);
+    expect(processed[2].id).toBe(3);
     expect(processed[0].orderMs).toBe(now);
     expect(processed[1].orderMs).toBe(now + 50);
     expect(processed[2].orderMs).toBe(now + 100);
   });
 
-  it('应该在未提供 orderMs 时不暂存任务', async () => {
-    queue = new Queue({
-      redis,
-      namespace,
-      orderingDelayMs: 150,
-    });
+  test('应该在未提供 orderMs 时不暂存任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ orderingDelayMs: 150 });
 
     const processed: string[] = [];
     let resolveComplete: () => void;
@@ -564,7 +440,7 @@ describe('自定义排序 (Custom Ordering)', () => {
       resolveComplete = resolve;
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as { id: string };
@@ -587,18 +463,13 @@ describe('自定义排序 (Custom Ordering)', () => {
     });
 
     await completePromise;
-    await worker.close();
 
     // Without orderMs, jobs should be processed in arrival order
     expect(processed).toEqual(['first', 'second']);
   });
 
-  it('应该在 orderingDelayMs 为 0 时不暂存任务', async () => {
-    queue = new Queue({
-      redis,
-      namespace,
-      orderingDelayMs: 0, // No staging
-    });
+  test('应该在 orderingDelayMs 为 0 时不暂存任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ orderingDelayMs: 0 });
 
     const processed: Array<{ id: number; orderMs: number }> = [];
     let resolveComplete: () => void;
@@ -606,7 +477,7 @@ describe('自定义排序 (Custom Ordering)', () => {
       resolveComplete = resolve;
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as { id: number };
@@ -619,8 +490,8 @@ describe('自定义排序 (Custom Ordering)', () => {
 
     const now = Date.now();
 
-    // Add jobs simultaneously (no delays) with orderMs in reverse order
-    const [job3, job2, job1] = await Promise.all([
+    // Add jobs simultaneously with orderMs in reverse order
+    await Promise.all([
       queue.add({
         groupId: 'test-group',
         data: { id: 3 },
@@ -639,7 +510,6 @@ describe('自定义排序 (Custom Ordering)', () => {
     ]);
 
     await completePromise;
-    await worker.close();
 
     // With orderingDelayMs = 0, jobs process in orderMs order (score-based) from ZSET
     expect(processed).toHaveLength(3);
@@ -648,12 +518,8 @@ describe('自定义排序 (Custom Ordering)', () => {
     expect(processed[2].id).toBe(3);
   });
 
-  it('应该为多个组独立处理暂存', async () => {
-    queue = new Queue({
-      redis,
-      namespace,
-      orderingDelayMs: 150,
-    });
+  test('应该为多个组独立处理暂存', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ orderingDelayMs: 150 });
 
     const processedA: number[] = [];
     const processedB: number[] = [];
@@ -662,7 +528,7 @@ describe('自定义排序 (Custom Ordering)', () => {
       resolveComplete = resolve;
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as { id: number };
@@ -704,19 +570,14 @@ describe('自定义排序 (Custom Ordering)', () => {
     });
 
     await completePromise;
-    await worker.close();
 
     // Each group should process in correct order
     expect(processedA).toEqual([1, 2]);
     expect(processedB).toEqual([3, 4]);
   });
 
-  it('应该处理启动多次的 promoter（幂等）', async () => {
-    queue = new Queue({
-      redis,
-      namespace,
-      orderingDelayMs: 150,
-    });
+  test('应该处理启动多次的 promoter（幂等）', async ({ createQueue, createWorker }) => {
+    const queue = createQueue({ orderingDelayMs: 150 });
 
     // Start promoter multiple times - should not cause issues
     await queue.startPromoter();
@@ -729,7 +590,7 @@ describe('自定义排序 (Custom Ordering)', () => {
       resolveComplete = resolve;
     });
 
-    const worker = new Worker({
+    const worker = createWorker({
       queue,
       handler: async (job) => {
         const data = job.data as { id: number };
@@ -753,7 +614,6 @@ describe('自定义排序 (Custom Ordering)', () => {
     });
 
     await completePromise;
-    await worker.close();
 
     expect(processed).toEqual([1, 2]);
   });

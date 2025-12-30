@@ -1,114 +1,77 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { Queue, Worker } from '../../src';
-import { createRedis } from '../helpers/redis';
+import { describe, expect, test } from '../helpers/suite';
 
 describe('队列清理功能 (Queue.clean)', () => {
-  const namespace = `test:clean:${Date.now()}`;
+  test('应清理超过宽限期的已完成任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue<{ n: number }>({ keepCompleted: 100 });
 
-  afterAll(async () => {
-    const redis = createRedis();
-    const keys = await redis.keys(`${namespace}*`);
-    if (keys.length) await redis.del(keys);
-    await redis.quit();
-  });
-
-  it('应清理超过宽限期的已完成任务', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:completed`,
-      keepCompleted: 100,
-    });
-
-    // Add and process two jobs
-    const w = new Worker<{ n: number }>({
-      queue: q,
+    const worker = createWorker<{ n: number }>({
+      queue,
       handler: async () => 'ok',
     });
-    w.run();
-    await q.add({ groupId: 'g1', data: { n: 1 } });
-    await q.add({ groupId: 'g1', data: { n: 2 } });
-    await q.waitForEmpty();
+    worker.run();
 
-    // Ensure there are completed jobs
-    const before = await q.getCompletedCount();
+    await queue.add({ groupId: 'g1', data: { n: 1 } });
+    await queue.add({ groupId: 'g1', data: { n: 2 } });
+    await queue.waitForEmpty();
+
+    const before = await queue.getCompletedCount();
     expect(before).toBeGreaterThanOrEqual(2);
 
-    // Clean all completed (grace 0 => older than now)
-    const cleaned = await q.clean(0, Number.MAX_SAFE_INTEGER, 'completed');
+    const cleaned = await queue.clean(0, Number.MAX_SAFE_INTEGER, 'completed');
     expect(cleaned).toBeGreaterThanOrEqual(2);
 
-    const after = await q.getCompletedCount();
+    const after = await queue.getCompletedCount();
     expect(after).toBe(0);
-
-    await w.close();
-    await redis.quit();
   });
 
-  it('应清理超过宽限期的失败任务', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:failed`,
-      keepFailed: 100,
-    });
+  test('应清理超过宽限期的失败任务', async ({ createQueue, createWorker }) => {
+    const queue = createQueue<{ n: number }>({ keepFailed: 100 });
 
-    const w = new Worker<{ n: number }>({
+    const worker = createWorker<{ n: number }>({
       maxAttempts: 1,
-      queue: q,
+      queue,
       handler: async () => {
         throw new Error('fail');
       },
     });
-    w.run();
+    worker.run();
 
-    await q.add({ groupId: 'g1', data: { n: 1 } });
-    await q.add({ groupId: 'g1', data: { n: 2 } });
-    await q.waitForEmpty();
+    await queue.add({ groupId: 'g1', data: { n: 1 } });
+    await queue.add({ groupId: 'g1', data: { n: 2 } });
+    await queue.waitForEmpty();
 
-    const before = await q.getFailedCount();
+    const before = await queue.getFailedCount();
     expect(before).toBeGreaterThanOrEqual(2);
 
-    const cleaned = await q.clean(0, Number.MAX_SAFE_INTEGER, 'failed');
+    const cleaned = await queue.clean(0, Number.MAX_SAFE_INTEGER, 'failed');
     expect(cleaned).toBeGreaterThanOrEqual(2);
 
-    const after = await q.getFailedCount();
+    const after = await queue.getFailedCount();
     expect(after).toBe(0);
-
-    await w.close();
-    await redis.quit();
   });
 
-  it('应清理超过宽限期的延迟任务', async () => {
-    const redis = createRedis();
-    const q = new Queue<{ n: number }>({
-      redis,
-      namespace: `${namespace}:delayed`,
+  test('应清理超过宽限期的延迟任务', async ({ createQueue }) => {
+    const queue = createQueue<{ n: number }>({
       keepCompleted: 100,
       keepFailed: 100,
     });
 
     // Add two delayed jobs 10 minutes in the future
-    await q.add({ groupId: 'g1', data: { n: 1 }, delay: 600_000 });
-    await q.add({ groupId: 'g1', data: { n: 2 }, delay: 600_000 });
+    await queue.add({ groupId: 'g1', data: { n: 1 }, delay: 600_000 });
+    await queue.add({ groupId: 'g1', data: { n: 2 }, delay: 600_000 });
 
-    // There should be no processing, just delayed
-    const beforeDelayed = await q.getDelayedCount();
+    const beforeDelayed = await queue.getDelayedCount();
     expect(beforeDelayed).toBeGreaterThanOrEqual(2);
 
-    // Clean all delayed (grace 0 => score <= now)
-    // Since delayed scores are > now, use a large grace to include them artificially: graceAt = now - (-infinity)
-    // Instead, we simulate by cleaning with graceAt far in the future: implement uses now-grace, so pass negative to include future
-    const cleaned = await q.clean(
+    // Clean all delayed
+    const cleaned = await queue.clean(
       -1 * 24 * 60 * 60 * 1000,
       Number.MAX_SAFE_INTEGER,
       'delayed',
     );
     expect(cleaned).toBeGreaterThanOrEqual(2);
 
-    const afterDelayed = await q.getDelayedCount();
+    const afterDelayed = await queue.getDelayedCount();
     expect(afterDelayed).toBe(0);
-
-    await redis.quit();
   });
 });
