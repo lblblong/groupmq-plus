@@ -1,3 +1,6 @@
+--- @include "includes/security/verify-token"
+--- @include "includes/group-state/remove-job-from-active"
+--- @include "includes/flow/update-parent-flow"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- Complete a job with metadata and atomically reserve the next job from the same group
@@ -17,8 +20,8 @@ local attempts = ARGV[10]
 local maxAttempts = ARGV[11]
 local now = tonumber(ARGV[12])
 local vt = tonumber(ARGV[13])
-local currentJobToken = ARGV[14] -- [NEW] Token of the job being completed
-local nextJobToken = ARGV[15]    -- [NEW] Token to assign to the NEXT job
+local currentJobToken = ARGV[14]
+local nextJobToken = ARGV[15]
 
 local processingKey = ns .. ":processing"
 local readyKey = ns .. ":ready"
@@ -36,22 +39,18 @@ if jobStatus ~= "processing" or not stillInProcessing then
   return nil
 end
 
--- [NEW] Token verification
-local procKey = ns .. ":processing:" .. completedJobId
-local storedToken = redis.call("HGET", procKey, "token")
-
--- If processing key doesn't exist (already deleted) or token doesn't match
-if not storedToken or storedToken ~= currentJobToken then
+-- Token verification (moved to dedicated module)
+if not verifyToken(ns, completedJobId, currentJobToken) then
   return nil
 end
 
--- [PHASE 3 MODIFICATION START: Get parentId before potentially deleting the job]
+-- Get parentId before potentially deleting the job
 local parentId = redis.call("HGET", jobKey, "parentId")
--- [PHASE 3 MODIFICATION END]
 
 -- Atomically mark as completed and remove from processing
 -- This prevents stalled checker from racing with us
 redis.call("HSET", jobKey, "status", "completing") -- Temporary status to block stalled checker
+local procKey = ns .. ":processing:" .. completedJobId
 redis.call("DEL", procKey)
 redis.call("ZREM", processingKey, completedJobId)
 
@@ -59,56 +58,15 @@ redis.call("ZREM", processingKey, completedJobId)
 
 if status == "completed" then
   local completedKey = ns .. ":completed"
-  
+
   -- CRITICAL: Always set final status first, even if job will be deleted
   -- This ensures any concurrent reads see "completed", not "completing"
   redis.call("HSET", jobKey, "status", "completed")
 
-  -- [PHASE 3 MODIFICATION START: Update parent flow if exists]
+  -- Update parent flow if this is a child task (moved to dedicated module)
   if parentId then
-    local parentKey = ns .. ":job:" .. parentId
-    -- 1. Store child result in flow:results hash (CRITICAL: was missing!)
-    local flowResultsKey = ns .. ":flow:results:" .. parentId
-    -- [NEW] 核心变更：包装结果为 {status, data} 结构
-    local flowEntry = cjson.encode({
-      status = status,
-      data = resultOrError
-    })
-    redis.call("HSET", flowResultsKey, completedJobId, flowEntry)
-    
-    -- 2. Decrement remaining counter
-    local remaining = redis.call("HINCRBY", parentKey, "flowRemaining", -1)
-    
-    -- 3. If all children done, move parent to waiting
-    if remaining <= 0 then
-      local parentStatus = redis.call("HGET", parentKey, "status")
-      if parentStatus == "waiting-children" then
-        redis.call("HSET", parentKey, "status", "waiting")
-        local parentGroupId = redis.call("HGET", parentKey, "groupId")
-        local parentScore = tonumber(redis.call("HGET", parentKey, "score"))
-        if not parentScore then
-          parentScore = tonumber(now)
-        end
-        
-        local pGZ = ns .. ":g:" .. parentGroupId
-        redis.call("ZADD", pGZ, parentScore, parentId)
-        redis.call("SADD", ns .. ":groups", parentGroupId)
-        
-        -- [LIMITED GROUP SET] Check if should add to ready or limited queue (if head)
-        local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
-        if pHead and #pHead >= 2 then
-           local pHeadScore = tonumber(pHead[2])
-           local pGroupActiveKey = ns .. ":g:" .. parentGroupId .. ":active"
-           local pConfigKey = ns .. ":config:" .. parentGroupId
-           local pLimit = tonumber(redis.call("HGET", pConfigKey, "concurrency")) or 1
-           local pCurrentActive = redis.call("LLEN", pGroupActiveKey)
-           
-           updateGroupReadyLimitedState(ns, parentGroupId, readyKey, limitedKey, pHeadScore)
-        end
-      end
-    end
+    updateParentFlow(ns, parentId, completedJobId, status, resultOrError, timestamp, readyKey, limitedKey)
   end
-  -- [PHASE 3 MODIFICATION END]
   
   if keepCompleted > 0 then
     -- Store full job metadata and add to completed set
@@ -177,27 +135,25 @@ local eventPayload = cjson.encode({
 })
 redis.call("PUBLISH", ns .. ":events", eventPayload)
 
--- Part 3: Handle group active list and get next job (BullMQ-style)
+-- Part 4: Handle group active list and get next job (BullMQ-style)
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
 local activeJobId = redis.call("LINDEX", groupActiveKey, 0)
 
--- [PHYSICAL SEPARATION] Decrement group job count
+-- Decrement group job count
 local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
 local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
 
--- Always clean up this job from active list, even if not at head
-if activeJobId == completedJobId then
-  -- Normal case: this job is at the head of active list
-  redis.call("LPOP", groupActiveKey)
-else
+-- Check if completed job is at the head of active list
+if activeJobId ~= completedJobId then
   -- Race condition: job is not at head (maybe already removed, or wrong job)
-  -- Clean it up anyway to prevent stale entries
-  redis.call("LREM", groupActiveKey, 1, completedJobId)
-  
-  -- If active list had a different job or was empty, don't try to reserve next
+  -- Clean it up anyway to prevent stale entries, but don't try to reserve next
+  removeJobFromActive(ns, gid, completedJobId)
   -- Return nil to indicate no chaining
   return nil
 end
+
+-- Normal case: this job is at the head of active list
+removeJobFromActive(ns, gid, completedJobId)
 
 local gZ = ns .. ":g:" .. gid
 local zpop = redis.call("ZPOPMIN", gZ, 1)

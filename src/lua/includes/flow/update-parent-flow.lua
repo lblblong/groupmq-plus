@@ -3,6 +3,7 @@
 -- Flow module: Update parent flow when child task completes
 -- Purpose: Track child completion results and promote parent to waiting when all children are done
 --
+-- Function: updateParentFlow(ns, parentId, childId, status, resultOrError, timestamp, readyKey, limitedKey)
 -- Parameters:
 --   ns: namespace (string)
 --   parentId: parent job ID (string)
@@ -12,9 +13,6 @@
 --   timestamp: completion timestamp (number)
 --   readyKey: key for ready queue (string)
 --   limitedKey: key for limited queue (string)
---
--- Returns:
---   nil (no specific return value)
 
 local function updateParentFlow(ns, parentId, childId, status, resultOrError, timestamp, readyKey, limitedKey)
   local parentKey = ns .. ":job:" .. parentId
@@ -64,5 +62,3 @@ local function updateParentFlow(ns, parentId, childId, status, resultOrError, ti
     end
   end
 end
-
-return updateParentFlow

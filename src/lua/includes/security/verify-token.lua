@@ -2,11 +2,11 @@
 -- Purpose: Ensure that the token provided matches the stored token in the processing lock
 -- This prevents unauthorized job completion attempts
 --
+-- Function: verifyToken(ns, jobId, token)
 -- Parameters:
 --   ns: namespace (string)
 --   jobId: job ID (string)
 --   token: token to verify (string)
---
 -- Returns:
 --   boolean: true if token is valid, false otherwise
 
@@ -21,5 +21,3 @@ local function verifyToken(ns, jobId, token)
 
   return true
 end
-
-return verifyToken

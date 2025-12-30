@@ -1,11 +1,12 @@
---- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/security/verify-token"
+--- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- argv: ns, jobId, groupId, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
 local groupId = ARGV[2]
-local token = ARGV[3] -- [NEW] Processing token for verification
+local token = ARGV[3]
 local gZ = ns .. ":g:" .. groupId
 local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
@@ -13,15 +14,17 @@ local limitedKey = ns .. ":limited"
 local jobKey = ns .. ":job:" .. jobId
 
 -- Token verification: Ensure only the correct worker can dead-letter the job
+-- Special handling: dead-letter can proceed if token is missing (job already recovered)
+-- but reject if token exists and doesn't match
 local procKey = ns .. ":processing:" .. jobId
 local storedToken = redis.call("HGET", procKey, "token")
 
--- If job still has a lock (processing) and token doesn't match, reject dead-letter
 if storedToken and storedToken ~= token then
-  return 0 -- Lock mismatch: another worker is processing this job
+  -- Lock mismatch: another worker is processing this job
+  return 0
 end
--- If no stored token but token was provided, also reject (safety: prevent dead-lettering recovered jobs)
 if not storedToken and token then
+  -- Safety: prevent dead-lettering recovered jobs
   return 0
 end
 
@@ -29,7 +32,7 @@ end
 redis.call("ZREM", gZ, jobId)
 redis.call("ZREM", ns .. ":delayed", jobId)
 
--- [PHYSICAL SEPARATION] Decrement group job count
+-- Decrement group job count
 local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
 local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
 
@@ -37,14 +40,11 @@ local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
 redis.call("DEL", procKey)
 redis.call("ZREM", ns .. ":processing", jobId)
 
--- No counter operations - use ZCARD for counts
-
 -- Remove idempotence mapping to allow reuse
 redis.call("DEL", ns .. ":unique:" .. jobId)
 
--- BullMQ-style: Remove from group active list if present
-local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-redis.call("LREM", groupActiveKey, 1, jobId)
+-- Remove from group active list if present (moved to dedicated module)
+removeJobFromActive(ns, groupId, jobId)
 
 -- Check if group is now empty or should be removed from ready queue
 if remainingJobs <= 0 then

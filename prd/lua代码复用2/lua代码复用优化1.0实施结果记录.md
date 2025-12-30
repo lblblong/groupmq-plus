@@ -77,19 +77,39 @@
 
 ---
 
-## 📋 待重构文件
+#### `src/lua/complete-and-reserve-next-with-metadata.lua` ✅
+- **重构时间**: 2025-12-30
+- **重构对比**:
 
-以下文件按照 PRD 要求仍需重构：
+| 项目 | 变更前 | 变更后 | 优化 |
+|-----|-------|-------|-----|
+| 总代码行数 | 272 行 | 228 行 | **减少 16.2%** |
+| 模块引入 | 1 个 | 4 个 | 功能更模块化 |
 
-### [ ] `complete-and-reserve-next-with-metadata.lua`
-- 状态: 待开始
-- 复杂度: 中等（涉及 reserve-next 逻辑，需谨慎处理）
-- 预计改动: 应用相同的模块化模式
+- **引入模块**:
+  1. `includes/security/verify-token`
+  2. `includes/group-state/remove-job-from-active`
+  3. `includes/flow/update-parent-flow`
+  4. `includes/group-lifecycle/update-group-ready-limited-state`
 
-### [ ] `dead-letter.lua`
-- 状态: 待开始
-- 复杂度: 低
-- 预计改动: 应用 `verify-token` 和 `remove-job-from-active` 模块
+- **替换的关键逻辑**:
+  - ✅ Token 校验（内联逻辑 → `verifyToken()`）
+  - ✅ Parent Flow 更新（~40 行 → `updateParentFlow()`）
+  - ✅ Active 列表移除（内联逻辑 → `removeJobFromActive()`）
+
+#### `src/lua/dead-letter.lua` ✅
+- **重构时间**: 2025-12-30
+- **文件大小**: 77 行（重构前后一致）
+- **说明**: 此文件相对简洁，重构主要是逻辑整理，无显著行数变化
+
+- **引入模块**:
+  1. `includes/security/verify-token`
+  2. `includes/group-state/remove-job-from-active`
+  3. `includes/group-lifecycle/update-group-ready-limited-state`
+
+- **替换的关键逻辑**:
+  - ✅ Active 列表移除（内联 LREM → `removeJobFromActive()`）
+  - ✅ Token 校验逻辑保留（专用处理，允许token缺失的场景）
 
 ---
 
@@ -108,11 +128,20 @@
 | 文件 | 变更前 | 变更后 | 减少行数 | 减少比例 |
 |-----|-------|-------|---------|---------|
 | complete-with-metadata.lua | 173 | 91 | 82 | 47.4% |
+| complete-and-reserve-next-with-metadata.lua | 272 | 228 | 44 | 16.2% |
+| dead-letter.lua | 77 | 77 | 0 | 0% |
+| **总计** | **522** | **396** | **126** | **24.1%** |
 
 ### 综合对比
 - **新增模块总行数**: 145 行
-- **主脚本减少**: 82 行
-- **净增加**: 63 行（但获得了更好的可维护性和复用性）
+- **主脚本减少**: 126 行
+- **净增加**: 19 行
+- **整体优化**: 减少重复代码，提升可维护性和复用性
+
+### 复用性指标
+- `verify-token` 模块: 被 3 个脚本复用（complete, complete-and-reserve, dead-letter）
+- `remove-job-from-active` 模块: 被 3 个脚本复用
+- `update-parent-flow` 模块: 被 2 个脚本复用（complete, complete-and-reserve）
 
 ---
 
@@ -136,10 +165,20 @@
 
 ---
 
-## 🔄 下一步行动
+## ✅ 重构完成状态
+
+所有 PRD 中涉及的主脚本已完成重构：
+
+| 文件 | 状态 | 完成时间 |
+|-----|------|---------|
+| complete-with-metadata.lua | ✅ 完成 | 2025-12-30 |
+| complete-and-reserve-next-with-metadata.lua | ✅ 完成 | 2025-12-30 |
+| dead-letter.lua | ✅ 完成 | 2025-12-30 |
+
+## 🔄 后续建议
 
 1. **测试验证**: 运行现有的 Redis Lua 脚本单元测试，确保重构后的功能完全一致
-2. **重构其他文件**: 按照同样的模式重构 `complete-and-reserve-next-with-metadata.lua` 和 `dead-letter.lua`
-3. **性能测试**: 确保模块化不会带来性能回退
-4. **文档更新**: 更新主文档，标记重构完成的文件
+2. **性能测试**: 确保模块化不会带来性能回退
+3. **其他脚本评估**: 评估是否需要对 `reserve-next.lua`、`process-job.lua` 等其他脚本进行类似的模块化重构
+4. **模块文档**: 为新增的 4 个模块编写更详细的使用文档和示例
 

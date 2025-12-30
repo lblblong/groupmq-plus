@@ -2,13 +2,11 @@
 -- Purpose: Safely remove a job from the group's active job list
 -- Handles both normal case (head of list) and race conditions (job elsewhere in list)
 --
+-- Function: removeJobFromActive(ns, groupId, jobId)
 -- Parameters:
 --   ns: namespace (string)
 --   groupId: group ID (string)
 --   jobId: job ID to remove (string)
---
--- Returns:
---   nil (no specific return value)
 
 local function removeJobFromActive(ns, groupId, jobId)
   local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
@@ -26,5 +24,3 @@ local function removeJobFromActive(ns, groupId, jobId)
     redis.call("LREM", groupActiveKey, 1, jobId)
   end
 end
-
-return removeJobFromActive
