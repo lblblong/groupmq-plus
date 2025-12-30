@@ -481,7 +481,8 @@ describe('Flow API (任务流方法)', () => {
 
 describe('Flow 执行 (父子任务流)', () => {
   let redis2: Redis
-  const namespace = `test:flow:${Date.now()}`
+  // 使用不同的命名空间前缀，避免与其他测试块冲突
+  const namespace = `test:flow:execution:${Date.now()}`
 
   beforeAll(async () => {
     redis2 = createRedis()
@@ -688,6 +689,8 @@ describe('Flow 执行 (父子任务流)', () => {
 
   it('父子任务均失败', async () => {
     let finalFailedJobs: string[] = []
+    let worker: Worker | undefined;
+
     try {
       const queue = new Queue({
         redis: redis2,
@@ -718,7 +721,7 @@ describe('Flow 执行 (父子任务流)', () => {
       })
       console.log('Flow added. Namespace:', namespace)
 
-      const worker = new Worker({
+      worker = new Worker({
         queue,
         handler: async (job) => {
           if (job.isFlowParent) {
@@ -746,9 +749,10 @@ describe('Flow 执行 (父子任务流)', () => {
       await parent.waitUntilFinished()
       await new Promise((resolve) => setTimeout(resolve, 500)) // 等待一下让日志输出
 
-      await worker.close()
     } catch (err) {
       console.log(err)
+    } finally {
+      if (worker) await worker.close()
     }
 
     expect(finalFailedJobs).toContain('parent-job')
@@ -920,7 +924,8 @@ describe('Flow 执行 (父子任务流)', () => {
 
 describe('Flow 错误处理 (任务流重试)', () => {
   let redis3: Redis
-  const namespace = `test:flow:${Date.now()}`
+  // 使用不同的命名空间，防止 Worker 在 cleanup 期间互相干扰
+  const namespace = `test:flow:error:${Date.now()}`
 
   beforeAll(async () => {
     redis3 = createRedis()
@@ -934,6 +939,8 @@ describe('Flow 错误处理 (任务流重试)', () => {
 
   it('确保父任务在子任务重试时依然在所有子任务结束时执行', async () => {
     let execHistory: string[] = []
+    let worker: Worker | undefined;
+
     try {
       const queue = new Queue({
         redis: redis3,
@@ -966,7 +973,7 @@ describe('Flow 错误处理 (任务流重试)', () => {
         ],
       })
 
-      const worker = new Worker({
+      worker = new Worker({
         queue,
         concurrency: 1,
         strategy: new PriorityStrategy(),
@@ -982,12 +989,14 @@ describe('Flow 错误处理 (任务流重试)', () => {
       })
 
       await parent.waitUntilFinished()
-      await worker.close()
+
     } catch (err) {
       console.log(err)
+    } finally {
+      if (worker) await worker.close()
     }
 
     expect(execHistory).toHaveLength(6)
     expect(execHistory.slice(-2)).toEqual(['parent-job', 'parent-job'])
-  })
+  }, 5000)
 })

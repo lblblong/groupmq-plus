@@ -182,7 +182,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       queue: queue,
       handler: async (_job) => {
         jobStarted = true;
-        await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate work
+        await new Promise((resolve) => setTimeout(resolve, 100)); // Simulate work - reduced for faster tests
         jobCompleted = true;
       },
     });
@@ -225,7 +225,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
         jobStarted = true;
         // Simulate a long-running job
         while (!shouldStop) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 20));
         }
       },
     });
@@ -360,7 +360,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     // Add a long-running job
     await queue.add({
       groupId: 'long-group',
-      data: { taskType: 'long-running', duration: 2000 }, // 2 second job (reduced for faster tests)
+      data: { taskType: 'long-running', duration: 300 }, // 300ms job (enough to test graceful shutdown)
     });
 
     let jobStartTime: number | null = null;
@@ -371,7 +371,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     const worker = new Worker({
       queue: queue,
       name: 'graceful-shutdown-worker',
-      blockingTimeoutSec: 1,
+      blockingTimeoutSec: 0.1,
       handler: async (job) => {
         jobStartTime = Date.now();
 
@@ -391,7 +391,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     const workerPromise = worker.run();
 
     // Wait for the job to start (give it a moment to pick up the job)
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(jobStartTime).not.toBeNull();
     expect(jobCompleted).toBe(false);
 
@@ -411,14 +411,14 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
 
     // The job should have completed before or very close to when the worker stopped
     const jobDuration = jobEndTime! - jobStartTime!;
-    expect(jobDuration).toBeGreaterThanOrEqual(1900); // At least ~2 seconds
-    expect(jobDuration).toBeLessThan(3000); // But not much more
+    expect(jobDuration).toBeGreaterThanOrEqual(280); // At least ~300ms
+    expect(jobDuration).toBeLessThan(600); // But not much more
 
     // Worker should not have stopped before the job completed
     expect(jobEndTime!).toBeLessThanOrEqual(workerStoppedTime! + 100); // Allow small margin
 
     await redis.quit();
-  }, 8000); // 8 second timeout for the test (reduced)
+  }, 8000); // 8 second timeout for the test
 
   it('关闭后不应该选择新任务 (should not pick up new jobs after shutdown is initiated)', async () => {
     const redis = createRedis();
@@ -450,13 +450,13 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
           setTimeout(() => {
             shutdownInitiated = true;
             worker.close();
-          }, 100);
+          }, 50);
 
-          // Take some time to process
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          // Take some time to process - reduced for faster tests
+          await new Promise((resolve) => setTimeout(resolve, 200));
         } else {
           // This should not be reached if shutdown works correctly
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       },
     });
@@ -507,7 +507,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     worker.run();
     // Give worker time to pick up the job before closing
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await worker.close(2000);
+    await worker.close(500); // Reduced timeout for faster tests
     expect(isCompleted).toBe(true);
     expect(worker.isProcessing()).toBe(false);
     expect(worker.getCurrentJob()).toBe(null);

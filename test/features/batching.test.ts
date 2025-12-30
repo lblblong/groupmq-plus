@@ -92,8 +92,8 @@ describe('自动批处理 - 简单批处理', () => {
       ),
     );
 
-    // Wait for processing
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Wait for processing - use waitForEmpty instead of fixed timeout
+    await queue.waitForEmpty();
 
     console.log('Processed:', processed.length);
     expect(processed.length).toBe(10);
@@ -219,8 +219,8 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     console.log('Jobs in staging:', stagedCount);
     expect(stagedCount).toBe(20);
 
-    // Wait for orderingDelayMs + processing time
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Wait for orderingDelayMs + processing time - use waitForEmpty
+    await queue.waitForEmpty(2000);
 
     // Verify all jobs were processed in correct order
     expect(processed.length).toBe(20);
@@ -295,7 +295,7 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     await Promise.all(jobPromises);
 
     // Wait for all jobs (immediate + staged with orderingDelayMs)
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await queue.waitForEmpty(1500);
 
     // All jobs should be processed now
     expect(processed.length).toBe(4);
@@ -360,7 +360,7 @@ describe('自动批处理 - 排序批处理 (orderingDelayMs)', () => {
     console.log('Added 30 jobs across 3 groups. Batches:', Math.ceil(30 / 20));
 
     // Wait for staging + processing (orderingDelayMs=100 + processing time)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await queue.waitForEmpty(2000);
 
     console.log('Processed groups:', Object.keys(processed));
     console.log(

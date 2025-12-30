@@ -57,12 +57,14 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
+      cleanupIntervalMs: 50,
+      schedulerIntervalMs: 50,
     });
 
     worker.run();
 
     const startTime = Date.now();
-    const delayMs = 1000; // 1 second delay
+    const delayMs = 200; // 200ms delay - reduced for faster tests
 
     // Add delayed job
     await queue.add({
@@ -92,11 +94,11 @@ describe('延迟任务 (Delayed Jobs)', () => {
 
     // Verify delayed job was processed after the delay
     const delayedJobProcessTime = delayedJob!.processedAt - startTime;
-    expect(delayedJobProcessTime).toBeGreaterThanOrEqual(delayMs - 100); // Allow some tolerance
+    expect(delayedJobProcessTime).toBeGreaterThanOrEqual(delayMs - 50); // Allow some tolerance
 
     // Verify immediate job was processed quickly
     const immediateJobProcessTime = immediateJob!.processedAt - startTime;
-    expect(immediateJobProcessTime).toBeLessThan(500);
+    expect(immediateJobProcessTime).toBeLessThan(200);
   });
 
   it('应该处理 runAt 调度', async () => {
@@ -110,12 +112,13 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 100, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      schedulerIntervalMs: 50,
     });
 
     worker.run();
 
-    const runAt = new Date(Date.now() + 800); // Run in 800ms
+    const runAt = new Date(Date.now() + 200); // Run in 200ms - reduced for faster tests
 
     await queue.add({
       groupId: 'scheduled-group',
@@ -136,7 +139,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
     const expectedRunTime = runAt.getTime();
     const timeDiff = Math.abs(actualRunTime - expectedRunTime);
 
-    expect(timeDiff).toBeLessThan(1000); // Allow 1s tolerance for scheduler tick + processing
+    expect(timeDiff).toBeLessThan(300); // Allow 300ms tolerance for scheduler tick + processing
   });
 
   it('应该不允许过去的日期用于 runAt', async () => {
@@ -180,37 +183,38 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 100, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      schedulerIntervalMs: 50,
     });
 
     worker.run();
 
     const startTime = Date.now();
 
-    // Add job with 2 second delay
+    // Add job with 400ms delay
     const job = await queue.add({
       groupId: 'change-delay-group',
       data: { id: 'changeable-job' },
-      delay: 2000,
+      delay: 400,
     });
 
-    // Wait 200ms then change delay to 100ms (so it should run soon)
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const changeSuccess = await job.changeDelay(100);
+    // Wait 50ms then change delay to 50ms (so it should run soon)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const changeSuccess = await job.changeDelay(50);
     expect(changeSuccess).toBe(true);
 
     // Wait for processing
-    await queue.waitForEmpty(2000);
+    await queue.waitForEmpty(1000);
 
     await worker.close();
 
     expect(processed).toHaveLength(1);
     expect(processed[0].id).toBe('changeable-job');
 
-    // Job should have been processed around 300-500ms (200ms wait + 100ms new delay + scheduler overhead)
+    // Job should have been processed around 100-200ms (50ms wait + 50ms new delay + scheduler overhead)
     const actualProcessTime = processed[0].processedAt - startTime;
-    expect(actualProcessTime).toBeGreaterThan(250); // At least 200ms wait + 100ms delay - some tolerance
-    expect(actualProcessTime).toBeLessThan(700); // Should be much faster than original 2s delay
+    expect(actualProcessTime).toBeGreaterThan(80); // At least 50ms wait + 50ms delay - some tolerance
+    expect(actualProcessTime).toBeLessThan(400); // Should be much faster than original 400ms delay
   });
 
   it('应该在延迟中保持组内的 FIFO 顺序', async () => {
@@ -221,7 +225,8 @@ describe('延迟任务 (Delayed Jobs)', () => {
       handler: async (job) => {
         processed.push((job.data as any).id);
       },
-      cleanupIntervalMs: 100, // Promote delayed jobs more frequently for test
+      cleanupIntervalMs: 50, // Promote delayed jobs more frequently for test
+      schedulerIntervalMs: 50,
     });
 
     worker.run();
@@ -230,19 +235,19 @@ describe('延迟任务 (Delayed Jobs)', () => {
     await queue.add({
       groupId: 'fifo-delay-group',
       data: { id: 'job1' },
-      delay: 500,
+      delay: 150,
       orderMs: 1000, // Earlier order
     });
 
     await queue.add({
       groupId: 'fifo-delay-group',
       data: { id: 'job2' },
-      delay: 300, // Shorter delay but later order
+      delay: 100, // Shorter delay but later order
       orderMs: 2000,
     });
 
     // Wait for processing (increased for scheduler + delays + processing)
-    await queue.waitForEmpty();
+    await queue.waitForEmpty(2000);
 
     await worker.close();
 
@@ -292,27 +297,27 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 1, // Run cleanup more frequently for faster test
-      schedulerIntervalMs: 1,
+      cleanupIntervalMs: 30, // Run cleanup more frequently for faster test
+      schedulerIntervalMs: 30,
     });
 
     worker.run();
 
-    // Create a job that repeats every 100ms
+    // Create a job that repeats every 50ms
     const cronJob = await queue.add({
       groupId: 'cron-group',
       data: { id: 'recurring-job', message: 'Hello from cron!' },
-      repeat: { every: 100 }, // Every 100ms
+      repeat: { every: 50 }, // Every 50ms - reduced from 100ms
     });
 
     expect(cronJob.id).toContain('repeat:');
 
-    // Wait for multiple executions
-    await new Promise((resolve) => setTimeout(resolve, 500)); // Wait 500ms
+    // Wait for multiple executions - reduced from 500ms
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
     await worker.close();
 
-    // Should have processed the job multiple times (at least 3 times in 500ms)
+    // Should have processed the job multiple times (at least 3 times in 250ms)
     expect(processed.length).toBeGreaterThanOrEqual(3);
     expect(processed.length).toBeLessThanOrEqual(8); // Shouldn't be too many
 
@@ -321,11 +326,11 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       expect(job.id).toBe('recurring-job');
     });
 
-    // Jobs should be spaced approximately 100ms apart
+    // Jobs should be spaced approximately 50ms apart
     if (processed.length >= 2) {
       const timeDiff = processed[1].processedAt - processed[0].processedAt;
-      expect(timeDiff).toBeGreaterThan(80); // Allow some tolerance
-      expect(timeDiff).toBeLessThan(200); // More generous tolerance for system overhead
+      expect(timeDiff).toBeGreaterThan(40); // Allow some tolerance
+      expect(timeDiff).toBeLessThan(150); // More generous tolerance for system overhead
     }
   });
 
@@ -366,13 +371,13 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       handler: async (job) => {
         processed.push((job.data as any).id);
       },
-      cleanupIntervalMs: 100,
-      schedulerIntervalMs: 50,
+      cleanupIntervalMs: 50,
+      schedulerIntervalMs: 30,
     });
 
     worker.run();
 
-    const repeatOptions = { every: 100 }; // Every 100ms
+    const repeatOptions = { every: 50 }; // Every 50ms - reduced for faster test
 
     // Create a repeating job
     await queue.add({
@@ -381,11 +386,11 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       repeat: repeatOptions,
     });
 
-    // Let it run a few times
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Let it run a few times - reduced
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     // Give the scheduler a moment to ensure the repeating job is fully set up
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Remove the repeating job
     const removed = await queue.removeRepeatingJob(
@@ -396,7 +401,7 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
 
     // Wait for the group to drain completely (any already-enqueued jobs to be processed)
     // The scheduler might have enqueued jobs just before we called removeRepeatingJob
-    const maxWait = 2000;
+    const maxWait = 1000;
     const startWait = Date.now();
     while (Date.now() - startWait < maxWait) {
       const waiting = await queue.getWaitingCount();
@@ -404,17 +409,17 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       if (waiting === 0 && active === 0) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 30));
     }
 
     const processedSoFar = processed.length;
 
     // Wait for several scheduler intervals to ensure the scheduler has had time to
     // process any remaining due jobs and see the removed flag
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Now verify no new jobs are scheduled - wait several repeat intervals
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     await worker.close();
 

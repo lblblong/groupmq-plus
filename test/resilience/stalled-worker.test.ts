@@ -46,7 +46,7 @@ describe('任务卡顿恢复 (Stalled Job Recovery)', () => {
       handler: async (job) => {
         return { processed: job.data };
       },
-      stalledInterval: 30000, // Check every 30 seconds
+      stalledInterval: 100, // Check every 100ms for faster tests
       maxStalledCount: 1, // Fail after 1 stall
       stalledGracePeriod: 0, // No grace period
     });
