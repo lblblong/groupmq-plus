@@ -91,17 +91,28 @@ if not uniqueSet then
 end
 
 -- Step 3: Store job data and get score/seq
-local storeOpts = {
+local result = storeJob({
+  ns = ns,
+  jobId = jobId,
+  groupId = groupId,
+  data = data,
   maxAttempts = maxAttempts,
   orderMs = orderMs,
   delayUntil = delayUntil,
   clientTimestamp = clientTimestamp
-}
-local result = storeJob(ns, jobId, groupId, data, storeOpts)
+})
 local score = result[1]
 
 -- Step 4: Route job to appropriate queue
-local jobStatus = addJobToGroup(ns, groupId, jobId, score, delayUntil, orderMs, orderingDelayMs)
+local jobStatus = addJobToGroup({
+  ns = ns,
+  groupId = groupId,
+  jobId = jobId,
+  score = score,
+  delayUntil = delayUntil,
+  orderMs = orderMs,
+  orderingDelayMs = orderingDelayMs
+})
 
 -- Return job data to avoid race condition where job might be processed & cleaned up
 -- before getJob() is called

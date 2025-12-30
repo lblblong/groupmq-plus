@@ -4,18 +4,24 @@
 -- Stalled recovery module: Trigger stalled check with throttling
 -- Purpose: Encapsulate stalled job check frequency control and recovery logic
 --
--- Function: tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, processingKey)
+-- Function: tryTriggerStalledCheck(opts)
 -- Parameters:
---   ns: namespace (string)
---   now: current timestamp in ms (number)
---   vt: visibility timeout in ms (number)
---   readyKey: ready queue key (string)
---   limitedKey: limited queue key (string)
---   processingKey: processing key (string)
+--   opts.ns: namespace (string)
+--   opts.now: current timestamp in ms (number)
+--   opts.vt: visibility timeout in ms (number)
+--   opts.readyKey: ready queue key (string)
+--   opts.limitedKey: limited queue key (string)
+--   opts.processingKey: processing key (string)
 -- Returns:
 --   boolean: true if stalled check was performed, false if throttled
 
-local function tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, processingKey)
+local function tryTriggerStalledCheck(opts)
+  local ns = opts.ns
+  local now = opts.now
+  local vt = opts.vt
+  local readyKey = opts.readyKey
+  local limitedKey = opts.limitedKey
+  local processingKey = opts.processingKey
   local stalledCheckKey = ns .. ":stalled:lastcheck"
   local lastCheck = tonumber(redis.call("GET", stalledCheckKey)) or 0
 

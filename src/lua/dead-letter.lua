@@ -8,5 +8,10 @@ local token = ARGV[3]
 
 -- 使用统一的死信处理模块
 -- 该模块会处理Token验证、任务清理、群组状态更新
-return moveToDeadLetter(ns, jobId, groupId, token)
+return moveToDeadLetter({
+  ns = ns,
+  jobId = jobId,
+  groupId = groupId,
+  token = token
+})
 

@@ -40,7 +40,7 @@ if jobStatus ~= "processing" or not stillInProcessing then
 end
 
 -- Token verification (moved to dedicated module)
-if not verifyToken(ns, completedJobId, currentJobToken) then
+if not verifyToken({ ns = ns, jobId = completedJobId, token = currentJobToken }) then
   return nil
 end
 

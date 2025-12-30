@@ -22,7 +22,7 @@ end
 local out = {}
 
 -- Try to trigger stalled check (throttled)
-tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, processingKey)
+tryTriggerStalledCheck({ ns = ns, now = now, vt = vt, readyKey = readyKey, limitedKey = limitedKey, processingKey = processingKey })
 
 -- Pop up to maxBatch groups from ready set (lowest score first)
 local groups = redis.call("ZRANGE", readyKey, 0, maxBatch - 1, "WITHSCORES")

@@ -1,11 +1,23 @@
 --- @include "includes/flow/remove-child-from-parent"
 --- @include "includes/group-lifecycle/cleanup-if-group-empty"
 
--- 入参: ns, jobId
--- 功能: 完整清理一个任务及其关联的所有数据结构（包括flow关系）
--- 返回: "deleted" | "not-found"
+--[[
+  删除任务及其所有关联数据 (Delete Job Completely)
 
-local function deleteJobCompletely(ns, jobId)
+  完整清理一个任务及其关联的所有数据结构（包括flow关系）
+
+  @param opts table 参数对象
+    - ns: string 命名空间
+    - jobId: string 任务ID
+
+  @return string "deleted" | "not-found"
+]]
+
+local function deleteJobCompletely(opts)
+  -- 参数解构
+  local ns = opts.ns
+  local jobId = opts.jobId
+
   local jobKey = ns .. ":job:" .. jobId
   local delayedKey = ns .. ":delayed"
   local processingKey = ns .. ":processing"

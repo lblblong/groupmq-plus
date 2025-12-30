@@ -1,23 +1,28 @@
--- Job lifecycle module: Store job
--- Purpose: Encapsulate job data construction and storage logic
---
--- Function: storeJob(ns, jobId, groupId, data, opts)
--- Parameters:
---   ns: namespace (string)
---   jobId: job ID (string)
---   groupId: group ID (string)
---   data: job data payload (string/JSON)
---   opts: table with options:
---     - maxAttempts: max retry attempts (number)
---     - timestamp: job creation timestamp (number)
---     - orderMs: ordering timestamp (number)
---     - delayUntil: delay deadline (number)
---     - clientTimestamp: client timestamp for accuracy (number)
--- Returns:
---   table: {score, seq} containing generated score and sequence
+--[[
+  存储任务 (Store Job)
 
-local function storeJob(ns, jobId, groupId, data, opts)
-  opts = opts or {}
+  将任务数据存储到 Redis，生成时间戳和序列号
+
+  @param opts table 参数对象
+    - ns: string 命名空间
+    - jobId: string 任务ID
+    - groupId: string 群组ID
+    - data: string 任务数据（JSON）
+    - maxAttempts: number 最大重试次数 (可选，默认0)
+    - timestamp: number 任务创建时间戳 (可选)
+    - orderMs: number 排序时间戳 (可选)
+    - delayUntil: number 延迟截止时间 (可选，默认0)
+    - clientTimestamp: number 客户端时间戳 (可选)
+
+  @return table {score, seq} 生成的得分和序列号
+]]
+
+local function storeJob(opts)
+  -- 参数解构
+  local ns = opts.ns
+  local jobId = opts.jobId
+  local groupId = opts.groupId
+  local data = opts.data
 
   local maxAttempts = opts.maxAttempts or 0
   local orderMs = opts.orderMs or (tonumber(redis.call("TIME")[1]) * 1000)

@@ -23,7 +23,7 @@ end
 local groups = redis.call("ZRANGE", readyKey, 0, scanLimit - 1, "WITHSCORES")
 
 -- Try to trigger stalled check (throttled) and handle recovery
-local stalledCheckPerformed = tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, processingKey)
+local stalledCheckPerformed = tryTriggerStalledCheck({ ns = ns, now = now, vt = vt, readyKey = readyKey, limitedKey = limitedKey, processingKey = processingKey })
 if stalledCheckPerformed and (not groups or #groups == 0) then
   -- Refresh groups list if stalled check was performed and list is empty
   groups = redis.call("ZRANGE", readyKey, 0, scanLimit - 1, "WITHSCORES")

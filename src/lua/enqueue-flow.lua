@@ -106,13 +106,16 @@ for i = 0, childrenCount - 1 do
   local childKey = ns .. ":job:" .. childId
   local childDelayUntil = childDelay > 0 and (now + childDelay) or 0
 
-  local storeOpts = {
+  local result = storeJob({
+    ns = ns,
+    jobId = childId,
+    groupId = childGroupId,
+    data = childData,
     maxAttempts = tonumber(childMaxAttempts),
     orderMs = childOrderMs,
     delayUntil = childDelayUntil,
     clientTimestamp = now
-  }
-  local result = storeJob(ns, childId, childGroupId, childData, storeOpts)
+  })
   local childScore = result[1]
 
   -- Add parent ID link to child
@@ -122,7 +125,15 @@ for i = 0, childrenCount - 1 do
   redis.call("SADD", ns .. ":flow:children:" .. parentId, childId)
 
   -- Route child to appropriate queue (using addJobToGroup with 0 orderingDelayMs)
-  local childStatus = addJobToGroup(ns, childGroupId, childId, childScore, childDelayUntil, childOrderMs, 0)
+  local childStatus = addJobToGroup({
+    ns = ns,
+    groupId = childGroupId,
+    jobId = childId,
+    score = childScore,
+    delayUntil = childDelayUntil,
+    orderMs = childOrderMs,
+    orderingDelayMs = 0
+  })
 
   table.insert(results, childId)
 end

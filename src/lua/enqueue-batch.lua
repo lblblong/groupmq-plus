@@ -1,6 +1,7 @@
 --- @include "includes/job-lifecycle/store-job"
 --- @include "includes/group-state/add-job-to-group"
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
 -- Batch enqueue multiple jobs atomically
 -- argv: ns, jobsJson, keepCompleted, clientTimestamp, orderingDelayMs
@@ -40,17 +41,28 @@ for i, job in ipairs(jobs) do
 
   if uniqueSet then
     -- Step 1: Store job data and get score
-    local storeOpts = {
+    local result = storeJob({
+      ns = ns,
+      jobId = jobId,
+      groupId = groupId,
+      data = data,
       maxAttempts = maxAttempts,
       orderMs = orderMs,
       delayUntil = delayUntil,
       clientTimestamp = clientTimestamp
-    }
-    local result = storeJob(ns, jobId, groupId, data, storeOpts)
+    })
     local score = result[1]
 
     -- Step 2: Route job to appropriate queue
-    local jobStatus = addJobToGroup(ns, groupId, jobId, score, delayUntil, orderMs, orderingDelayMs)
+    local jobStatus = addJobToGroup({
+      ns = ns,
+      groupId = groupId,
+      jobId = jobId,
+      score = score,
+      delayUntil = delayUntil,
+      orderMs = orderMs,
+      orderingDelayMs = orderingDelayMs
+    })
 
     -- Mark group for ready queue update if job is waiting (not delayed/staged)
     if jobStatus == "waiting" then
@@ -98,25 +110,14 @@ for groupId, _ in pairs(groupsToUpdate) do
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-
-    -- [LIMITED GROUP SET] Check if group is already in limited
-    local isLimited = redis.call("ZSCORE", limitedKey, groupId)
-
-    if not isLimited then
-      -- Group not in limited, check capacity
-      local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-      local configKey = ns .. ":config:" .. groupId
-      local currentActive = redis.call("LLEN", groupActiveKey)
-      local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-
-      if currentActive >= limit then
-        -- Group is full, add to limited
-        redis.call("ZADD", limitedKey, headScore, groupId)
-      else
-        -- Group has capacity, add to ready
-        redis.call("ZADD", readyKey, headScore, groupId)
-      end
-    end
+    -- 直接调用核心辅助函数
+    updateGroupReadyLimitedState({
+      ns = ns,
+      groupId = groupId,
+      readyKey = readyKey,
+      limitedKey = limitedKey,
+      headScore = headScore
+    })
   end
 end
 

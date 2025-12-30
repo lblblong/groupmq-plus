@@ -165,70 +165,88 @@ checkQueueEmpty({
 
 ### 📂 group-state
 - [x] **add-job-to-group.lua** ✓ 调用方已更新为 `{ ns, groupId, readyKey, limitedKey, headScore }`
-- [ ] **remove-job-from-active.lua**
+- [x] **remove-job-from-active.lua** ✓ 已是Options Table形式，4/4处调用已全部更新
+    * ✅ complete-job.lua:80 已更新
+    * ✅ complete-and-reserve-next-with-metadata.lua:159 已更新
+    * ✅ complete-and-reserve-next-with-metadata.lua:169 已更新
+    * ✅ move-to-dead-letter.lua:50 已更新
 
 ### 📂 group-status
-- [ ] **get-group-head-job.lua**
+- [x] **get-group-head-job.lua** ✓ 改造为 `{ ns, groupId }` + 1/1处调用已更新
+    * ✅ complete-job.lua:91 已更新
 
 ### 📂 job-lifecycle
-- [ ] **delete-job-completely.lua**
-- [x] **move-to-dead-letter.lua** ✓ 调用方已更新为 `{ ns, groupId, readyKey, limitedKey, headScore }`
-- [ ] **record-job-finalization.lua**
-- [ ] **store-job.lua**
+- [x] **delete-job-completely.lua** ✓ 改造为 `{ ns, jobId }` + 1/1处调用已更新
+    * ✅ remove.lua:7 已更新
+- [x] **move-to-dead-letter.lua** ✓ 改造为 `{ ns, jobId, groupId, token }` + 1/1处调用已更新
+    * ✅ dead-letter.lua:11 已更新
+- [x] **record-job-finalization.lua** ✓ 已是Options Table形式（options）+ 1/1处调用已更新
+    * ✅ complete-job.lua:127 已更新
+- [x] **store-job.lua** ✓ 改造为 `{ ns, jobId, groupId, data, maxAttempts, orderMs, delayUntil, clientTimestamp }` + 3/3处调用已全部更新
+    * ✅ enqueue.lua:94 已更新
+    * ✅ enqueue-batch.lua:43 已更新
+    * ✅ enqueue-flow.lua:109 已更新
 
 ### 📂 job-recovery
-- [x] **recover-single-job.lua** ✓ 改造为 `{ ns, jobId, groupId, jobScore, delayUntil, now, readyKey, limitedKey, processingKey }` + 调用方已更新
+- [x] **recover-single-job.lua** ✓ 改造为 `{ ns, jobId, groupId, jobScore, delayUntil, now, readyKey, limitedKey, processingKey }` + 1/1处调用已更新
+    * ✅ cleanup.lua:31 已更新
 
 ### 📂 retry-handling
-- [x] **handle-job-retry-with-backoff.lua** ✓ 改造为 `{ ns, jobId, groupId, token, backoffMs }`
+- [x] **handle-job-retry-with-backoff.lua** ✓ 改造为 `{ ns, jobId, groupId, token, backoffMs }` + 1/1处调用已更新
+    * ✅ retry.lua:11 已更新
 
 ### 📂 security
-- [ ] **verify-token.lua**
+- [x] **verify-token.lua** ✓ 改造为 `{ ns, jobId, token }` + 2/2处调用已全部更新
+    * ✅ complete-job.lua:69 已更新
+    * ✅ complete-and-reserve-next-with-metadata.lua:43 已更新
 
 ### 📂 stalled-recovery
-- [x] **recover-stalled-jobs-complete.lua** ✓ 调用方已更新为 `{ ns, groupId, readyKey, limitedKey, headScore }`
-- [x] **try-trigger-stalled-check.lua** ✓ 调用方已更新为 `{ ns, groupId, readyKey, limitedKey, headScore }`
+- [x] **recover-stalled-jobs-complete.lua** ✓ 改造为 `{ ns, now, gracePeriod, maxStalledCount, readyKey, limitedKey }` + 1/1处调用已更新
+    * ✅ check-stalled.lua:33 已更新
+- [x] **try-trigger-stalled-check.lua** ✓ 改造为 `{ ns, now, vt, readyKey, limitedKey, processingKey }` + 2/2处调用已全部更新
+    * ✅ reserve.lua:26 已更新
+    * ✅ reserve-batch.lua:25 已更新
 
 ---
 
 ## 4. 进度概览 (Progress Overview)
 
-### 已完成阶段 ✅ (16/27)
+### 已完成阶段 ✅ (29/29)
 
 **第一阶段 - 关键路径函数重构** (已完成)
 - ✅ common 目录 (2/2)
 - ✅ concurrency-control 目录 (4/4)
-- ✅ group-lifecycle 关键函数: `updateGroupReadyLimitedState` (核心函数，11+处调用)
-- ✅ job-recovery 目录 (1/1)
-- ✅ retry-handling 目录 (1/1)
+- ✅ dal 目录 (3/3)
 - ✅ delayed-handling 目录 (1/1)
 - ✅ flow 目录 (2/2)
-- ✅ ghost-cleanup 目录 (1/1) ⭐ 本次完成
+- ✅ ghost-cleanup 目录 (1/1)
 - ✅ group-analysis 目录 (1/1)
-- ✅ group-lifecycle 目录 (2/2) ⭐ 本次完成（cleanup-if-group-empty.lua + 4处调用）
-- ✅ group-state 调用方 (1/1)
-- ✅ job-lifecycle 调用方 (1/1)
-- ✅ stalled-recovery 调用方 (2/2)
+- ✅ group-lifecycle 目录 (2/2)（cleanup-if-group-empty.lua + 4处调用）
+- ✅ group-lifecycle 关键函数: `updateGroupReadyLimitedState` (核心函数，11+处调用)
+- ✅ group-state 目录 (1/1)（remove-job-from-active.lua + 4处调用）
+- ✅ group-status 目录 (1/1)（get-group-head-job.lua + 1处调用）
+- ✅ job-lifecycle 目录 (4/4)（delete-job-completely.lua + store-job.lua + 所有调用）
+- ✅ job-recovery 目录 (1/1)（recover-single-job.lua + 1处调用）
+- ✅ retry-handling 目录 (1/1)（handle-job-retry-with-backoff.lua + 1处调用）
+- ✅ security 目录 (1/1)（verify-token.lua + 2处调用）
+- ✅ stalled-recovery 目录 (2/2) ⭐ 补充完成（recover-stalled-jobs-complete.lua + try-trigger-stalled-check.lua + 3处调用）
 
-**已更新的根目录 Lua 脚本** (10个)
+**已更新的根目录 Lua 脚本** (18个)
 - is-empty.lua, reserve.lua, reserve-atomic.lua, reserve-batch.lua
 - complete-job.lua, complete-and-reserve-next-with-metadata.lua
-- promote-staged.lua, cleanup.lua, cleanup-poisoned-group.lua, test-merge.lua
+- promote-staged.lua, cleanup.lua, cleanup-poisoned-group.lua, test-merge.lua, check-stalled.lua
+- remove.lua, enqueue.lua, enqueue-batch.lua, enqueue-flow.lua, dead-letter.lua, retry.lua
 
-### 待完成阶段 (12/27)
+### 待完成阶段
 
-- [ ] dal 目录 (3/3)
-- [ ] group-lifecycle: cleanup-if-group-empty.lua (1/1)
-- [ ] group-state: remove-job-from-active.lua (1/1)
-- [ ] group-status 目录 (1/1)
-- [ ] job-lifecycle 其他函数 (3/4)
-- [ ] security 目录 (1/1)
+✅ **全部完成！**
 
 ### 关键改动统计
 
 | 指标 | 数值 |
 |------|------|
-| 修改的文件 | 28个 |
-| 改造的内部函数 | 11个 |
-| 更新的函数调用方 | 21+处 |
-| 完成度 | 56% (15/27) |
+| 修改的文件 | 44个 |
+| 改造的内部函数 | 23个 |
+| 更新的函数调用方 | 38处 |
+| 已更新的根目录脚本 | 18个 |
+| **完成度** | **100% (29/29)** ✨ |

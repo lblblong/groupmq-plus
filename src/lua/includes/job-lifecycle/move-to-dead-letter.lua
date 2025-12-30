@@ -1,17 +1,27 @@
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
---- 功能: 将任务标记为死信并清理（支持Token验证和原子操作）
---- 参数:
----   ns: 命名空间
----   jobId: 任务ID
----   groupId: 群组ID
----   token: 用于验证的Token（可选，如果提供则验证Token匹配）
---- 返回:
----   1: 成功
----   0: Token不匹配或任务不存在
----
-local function moveToDeadLetter(ns, jobId, groupId, token)
+--[[
+  将任务标记为死信 (Move to Dead Letter)
+
+  原子性地将任务标记为死信，清理相关数据，更新群组状态
+
+  @param opts table 参数对象
+    - ns: string 命名空间
+    - jobId: string 任务ID
+    - groupId: string 群组ID
+    - token: string 用于验证的Token（可选）
+
+  @return number 1: 成功; 0: Token不匹配或任务不存在
+]]
+
+local function moveToDeadLetter(opts)
+  -- 参数解构
+  local ns = opts.ns
+  local jobId = opts.jobId
+  local groupId = opts.groupId
+  local token = opts.token
+
   local jobKey = ns .. ":job:" .. jobId
   local procKey = ns .. ":processing:" .. jobId
   local gZ = ns .. ":g:" .. groupId
@@ -47,7 +57,11 @@ local function moveToDeadLetter(ns, jobId, groupId, token)
   redis.call("DEL", ns .. ":unique:" .. jobId)
 
   -- 从群组活跃列表移除（使用专门的模块处理）
-  removeJobFromActive(ns, groupId, jobId)
+  removeJobFromActive({
+    ns = ns,
+    groupId = groupId,
+    jobId = jobId
+  })
 
   -- 检查群组是否为空或需要从ready队列移除
   if remainingJobs <= 0 then

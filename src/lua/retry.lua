@@ -8,4 +8,4 @@ local token = ARGV[3]
 
 local groupId = redis.call("HGET", ns .. ":job:" .. jobId, "groupId")
 
-return handleJobRetryWithBackoff(ns, jobId, groupId, token, backoffMs)
+return handleJobRetryWithBackoff({ ns = ns, jobId = jobId, groupId = groupId, token = token, backoffMs = backoffMs })

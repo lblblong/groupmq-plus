@@ -66,7 +66,7 @@ if jobStatus ~= "processing" or not stillInProcessing then
 end
 
 -- 令牌验证
-if not verifyToken(ns, jobId, token) then
+if not verifyToken({ ns = ns, jobId = jobId, token = token }) then
   return 0
 end
 
@@ -88,7 +88,10 @@ local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
 redis.call("HINCRBY", groupMetaKey, "count", -1)
 
 -- 检查群组中是否还有更多任务并更新状态
-local nextJobId = getGroupHeadJob(ns, gid)
+local nextJobId = getGroupHeadJob({
+  ns = ns,
+  groupId = gid
+})
 if nextJobId then
   -- 群组还有更多任务，更新 ready/limited 状态
   local gZ = ns .. ":g:" .. gid

@@ -2,15 +2,18 @@
 -- Purpose: Ensure that the token provided matches the stored token in the processing lock
 -- This prevents unauthorized job completion attempts
 --
--- Function: verifyToken(ns, jobId, token)
+-- Function: verifyToken(opts)
 -- Parameters:
---   ns: namespace (string)
---   jobId: job ID (string)
---   token: token to verify (string)
+--   opts.ns: namespace (string)
+--   opts.jobId: job ID (string)
+--   opts.token: token to verify (string)
 -- Returns:
 --   boolean: true if token is valid, false otherwise
 
-local function verifyToken(ns, jobId, token)
+local function verifyToken(opts)
+  local ns = opts.ns
+  local jobId = opts.jobId
+  local token = opts.token
   local procKey = ns .. ":processing:" .. jobId
   local storedToken = redis.call("HGET", procKey, "token")
 

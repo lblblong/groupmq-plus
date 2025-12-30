@@ -1,15 +1,19 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
--- 入参: ns, now, gracePeriod, maxStalledCount
+-- 入参: opts.ns, opts.now, opts.gracePeriod, opts.maxStalledCount
 -- 功能: 查询过期任务，恢复或失败处理
 -- 返回: 处理结果数组 [jobId, groupId, action, ...]
 
-local function recoverStalledJobsCompletely(ns, now, gracePeriod, maxStalledCount)
+local function recoverStalledJobsCompletely(opts)
+  local ns = opts.ns
+  local now = opts.now
+  local gracePeriod = opts.gracePeriod
+  local maxStalledCount = opts.maxStalledCount
   local processingKey = ns .. ":processing"
   local groupsKey = ns .. ":groups"
-  local readyKey = ns .. ":ready"
-  local limitedKey = ns .. ":limited"
+  local readyKey = opts.readyKey or (ns .. ":ready")
+  local limitedKey = opts.limitedKey or (ns .. ":limited")
 
   -- 查询候选任务
   local expiredJobs = redis.call("ZRANGEBYSCORE", processingKey, 0, now - gracePeriod, "LIMIT", 0, 100)

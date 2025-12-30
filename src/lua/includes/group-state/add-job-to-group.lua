@@ -4,8 +4,8 @@
 -- Purpose: Route job to appropriate queue (Delayed, Stage, or Group Waiting)
 -- based on delay and ordering constraints
 --
--- Function: addJobToGroup(ns, groupId, jobId, score, delayUntil, orderMs, orderingDelayMs)
--- Parameters:
+-- Function: addJobToGroup(opts)
+-- Parameters (via opts table):
 --   ns: namespace (string)
 --   groupId: group ID (string)
 --   jobId: job ID (string)
@@ -16,7 +16,15 @@
 -- Returns:
 --   string: job status ("delayed", "staged", or "waiting")
 
-local function addJobToGroup(ns, groupId, jobId, score, delayUntil, orderMs, orderingDelayMs)
+local function addJobToGroup(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+  local jobId = opts.jobId
+  local score = opts.score
+  local delayUntil = opts.delayUntil
+  local orderMs = opts.orderMs
+  local orderingDelayMs = opts.orderingDelayMs
+
   local jobKey = ns .. ":job:" .. jobId
   local readyKey = ns .. ":ready"
   local delayedKey = ns .. ":delayed"

@@ -1,5 +1,6 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/group-state/remove-job-from-active"
 
 -- 入参:
 --   opts.ns: 命名空间
@@ -45,8 +46,11 @@ local function handleJobRetryWithBackoff(opts)
   redis.call("ZREM", ns .. ":processing", jobId)
 
   -- 从活跃列表移除
-  local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-  redis.call("LREM", groupActiveKey, 1, jobId)
+  removeJobFromActive({
+    ns = ns,
+    groupId = groupId,
+    jobId = jobId
+  })
 
   local score = tonumber(redis.call("HGET", jobKey, "score"))
   local gZ = ns .. ":g:" .. groupId

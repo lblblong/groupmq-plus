@@ -30,7 +30,14 @@ local readyKey = ns .. ":ready"
 local limitedKey = ns .. ":limited"
 
 -- Call the stalled recovery function
-local results = recoverStalledJobsCompletely(ns, now, gracePeriod, maxStalledCount)
+local results = recoverStalledJobsCompletely({
+  ns = ns,
+  now = now,
+  gracePeriod = gracePeriod,
+  maxStalledCount = maxStalledCount,
+  readyKey = readyKey,
+  limitedKey = limitedKey
+})
 
 return results
 
