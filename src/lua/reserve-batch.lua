@@ -1,3 +1,4 @@
+--- @include "includes/common/is-queue-paused"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/stalled-recovery/try-trigger-stalled-check"
@@ -14,7 +15,7 @@ local processingKey = ns .. ":processing"
 local limitedKey = ns .. ":limited"
 
 -- Early exit if paused
-if redis.call("GET", ns .. ":paused") then
+if isQueuePaused(ns) then
   return {}
 end
 

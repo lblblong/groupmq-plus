@@ -1,3 +1,4 @@
+--- @include "includes/common/is-queue-paused"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
@@ -17,7 +18,7 @@ local groupActiveKey = ns .. ":g:" .. targetGroupId .. ":active"
 local configKey = ns .. ":config:" .. targetGroupId
 
 -- Respect paused state
-if redis.call("GET", ns .. ":paused") then
+if isQueuePaused(ns) then
   return nil
 end
 

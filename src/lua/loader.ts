@@ -189,6 +189,12 @@ export async function evalScript<T = any>(
   argv: Array<string>,
   numKeys: number,
 ): Promise<T> {
-  const sha = await loadScript(client, name);
-  return (client as any).evalsha(sha, numKeys, ...argv);
+  try {
+    const sha = await loadScript(client, name);
+    const res = await (client as any).evalsha(sha, numKeys, ...argv);
+    return res
+  } catch (err) {
+    console.log('执行脚本失败', err)
+    throw err;
+  }
 }
