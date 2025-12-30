@@ -65,7 +65,16 @@ if status == "completed" then
 
   -- Update parent flow if this is a child task (moved to dedicated module)
   if parentId then
-    updateParentFlow(ns, parentId, completedJobId, status, resultOrError, timestamp, readyKey, limitedKey)
+    updateParentFlow({
+      ns = ns,
+      parentId = parentId,
+      childId = completedJobId,
+      status = status,
+      resultOrError = resultOrError,
+      timestamp = timestamp,
+      readyKey = readyKey,
+      limitedKey = limitedKey
+    })
   end
   
   if keepCompleted > 0 then
@@ -147,13 +156,21 @@ local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
 if activeJobId ~= completedJobId then
   -- Race condition: job is not at head (maybe already removed, or wrong job)
   -- Clean it up anyway to prevent stale entries, but don't try to reserve next
-  removeJobFromActive(ns, gid, completedJobId)
+  removeJobFromActive({
+    ns = ns,
+    groupId = gid,
+    jobId = completedJobId
+  })
   -- Return nil to indicate no chaining
   return nil
 end
 
 -- Normal case: this job is at the head of active list
-removeJobFromActive(ns, gid, completedJobId)
+removeJobFromActive({
+  ns = ns,
+  groupId = gid,
+  jobId = completedJobId
+})
 
 local gZ = ns .. ":g:" .. gid
 local zpop = redis.call("ZPOPMIN", gZ, 1)

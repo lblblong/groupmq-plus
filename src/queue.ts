@@ -1177,11 +1177,25 @@ export class Queue<T = any> {
    * @deprecated Use completeWithMetadata() for internal operations. This method
    * is kept for backward compatibility and testing only.
    */
-  async complete(job: { id: string; groupId: string }) {
+  async complete(job: { id: string; groupId: string; token?: string }) {
     await evalScript<number>(
       this.r,
-      'complete',
-      [this.ns, job.id, job.groupId],
+      'complete-job',
+      [
+        this.ns,
+        job.id,
+        job.groupId,
+        'completed',
+        String(Date.now()),
+        JSON.stringify(null),
+        String(this.keepCompleted),
+        String(this.keepFailed),
+        String(Date.now()),
+        String(Date.now()),
+        '0',
+        '0',
+        job.token || '',
+      ],
       1
     )
   }
@@ -1207,7 +1221,7 @@ export class Queue<T = any> {
 
     await evalScript<number>(
       this.r,
-      'complete-with-metadata',
+      'complete-job',
       [
         this.ns,
         job.id,
@@ -1385,10 +1399,11 @@ export class Queue<T = any> {
     try {
       await evalScript<number>(
         this.r,
-        'record-job-result',
+        'complete-job',
         [
           this.ns,
           job.id,
+          job.groupId,
           'completed',
           String(finishedOn),
           JSON.stringify(result ?? null),
@@ -1398,6 +1413,7 @@ export class Queue<T = any> {
           String(finishedOn),
           String(attempts),
           String(maxAttempts),
+          '', // no token for legacy method
         ],
         1
       )
@@ -1473,10 +1489,11 @@ export class Queue<T = any> {
     try {
       await evalScript<number>(
         this.r,
-        'record-job-result',
+        'complete-job',
         [
           this.ns,
           job.id,
+          job.groupId,
           'failed',
           String(finishedOn),
           errorInfo,

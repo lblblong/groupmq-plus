@@ -10,9 +10,8 @@ export type ScriptName =
   | 'reserve'
   | 'reserve-batch'
   | 'reserve-atomic'
-  | 'complete'
+  | 'complete-job'
   | 'complete-and-reserve-next-with-metadata'
-  | 'complete-with-metadata'
   | 'retry'
   | 'heartbeat'
   | 'cleanup'
@@ -28,7 +27,6 @@ export type ScriptName =
   | 'clean-status'
   | 'is-empty'
   | 'dead-letter'
-  | 'record-job-result'
   | 'check-stalled'
   | 'validate-limited-set';
 

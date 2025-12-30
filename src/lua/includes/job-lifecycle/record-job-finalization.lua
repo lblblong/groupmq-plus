@@ -1,10 +1,34 @@
--- 入参: ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts
--- 功能: 原子性地记录完成/失败状态，应用保留策略
--- status: "completed" 或 "failed"
--- keepCount: 保留记录数，0表示立即删除
--- 返回: "recorded"
+--[[
+  记录任务完成/失败状态 (Record Job Finalization)
+  
+  原子性地记录完成/失败状态，应用保留策略
+  
+  @param options table 参数对象
+    - ns: string 命名空间
+    - jobId: string 任务ID
+    - status: string "completed" 或 "failed"
+    - resultOrError: string 结果或错误信息 (JSON)
+    - finishedOn: string 完成时间戳
+    - keepCount: number 保留记录数，0表示立即删除
+    - processedOn: string 处理开始时间戳 (可选)
+    - attempts: string 尝试次数 (可选)
+    - maxAttempts: string 最大尝试次数 (可选)
+  
+  @return string "recorded"
+]]
 
-local function recordJobFinalization(ns, jobId, status, resultOrError, finishedOn, keepCount, processedOn, attempts, maxAttempts)
+local function recordJobFinalization(options)
+  -- 参数解构
+  local ns = options.ns
+  local jobId = options.jobId
+  local status = options.status
+  local resultOrError = options.resultOrError
+  local finishedOn = options.finishedOn
+  local keepCount = options.keepCount
+  local processedOn = options.processedOn
+  local attempts = options.attempts
+  local maxAttempts = options.maxAttempts
+
   local jobKey = ns .. ":job:" .. jobId
   local statusKey = (status == "completed") and (ns .. ":completed") or (ns .. ":failed")
 
@@ -59,4 +83,3 @@ local function recordJobFinalization(ns, jobId, status, resultOrError, finishedO
 
   return "recorded"
 end
-

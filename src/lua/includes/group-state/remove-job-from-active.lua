@@ -1,26 +1,35 @@
--- Group state module: Remove job from active list
--- Purpose: Safely remove a job from the group's active job list
--- Handles both normal case (head of list) and race conditions (job elsewhere in list)
---
--- Function: removeJobFromActive(ns, groupId, jobId)
--- Parameters:
---   ns: namespace (string)
---   groupId: group ID (string)
---   jobId: job ID to remove (string)
+--[[
+  从活跃列表移除任务 (Remove Job from Active List)
+  
+  安全地从群组的活跃任务列表中移除任务
+  处理正常情况（任务在列表头部）和竞态条件（任务在列表其他位置）
+  
+  @param options table 参数对象
+    - ns: string 命名空间
+    - groupId: string 群组ID
+    - jobId: string 任务ID
+  
+  @return nil
+]]
 
-local function removeJobFromActive(ns, groupId, jobId)
+local function removeJobFromActive(options)
+  -- 参数解构
+  local ns = options.ns
+  local groupId = options.groupId
+  local jobId = options.jobId
+
   local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
 
-  -- Get the head of the active list
+  -- 获取活跃列表的头部
   local headJobId = redis.call("LINDEX", groupActiveKey, 0)
 
   if headJobId == jobId then
-    -- Normal case: job is at the head of the active list
+    -- 正常情况：任务在活跃列表头部
     redis.call("LPOP", groupActiveKey)
   else
-    -- Race condition: job not at head, but still remove to prevent stale entries
-    -- This can happen if another worker already processed and removed it,
-    -- or if the job was processed out of order
+    -- 竞态条件：任务不在头部，但仍需移除以防止过期条目
+    -- 这可能发生在另一个 worker 已经处理并移除了它，
+    -- 或者任务被乱序处理
     redis.call("LREM", groupActiveKey, 1, jobId)
   end
 end
