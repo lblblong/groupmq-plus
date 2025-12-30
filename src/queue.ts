@@ -2932,8 +2932,8 @@ export class Queue<T = any> {
       try {
         const n = await evalScript<number>(
           this.r,
-          'promote-delayed-one',
-          [this.ns, String(now)],
+          'promote-delayed',
+          [this.ns, String(now), '1'],
           1
         )
         if (!n || n <= 0) break
@@ -3027,7 +3027,7 @@ export class Queue<T = any> {
     try {
       return await evalScript<number>(
         this.r,
-        'promote-delayed-jobs',
+        'promote-delayed',
         [this.ns, String(Date.now())],
         1
       )
