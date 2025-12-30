@@ -2,6 +2,7 @@
 --- @include "includes/common/format-job-response"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/dal/fetch-job-data"
 
 -- Atomic reserve operation that checks lock/limit and reserves in one operation
 -- argv: ns, nowEpochMs, vtMs, targetGroupId, allowedJobId (optional), token
@@ -90,7 +91,6 @@ if not head or #head == 0 then
   return nil
 end
 local headJobId = head[1]
-local jobKey = ns .. ":job:" .. headJobId
 
 -- Pop the job
 local zpop = redis.call("ZPOPMIN", gZ, 1)
@@ -98,11 +98,11 @@ if not zpop or #zpop == 0 then
   return nil
 end
 headJobId = zpop[1]
+local jobKey = ns .. ":job:" .. headJobId
 
-local job = redis.call("HMGET", jobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
-local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
-
-if not id or id == false then
+-- Read and validate job data
+local job = fetchJobData({ ns = ns, jobId = headJobId })
+if not job then
   -- Corruption handling
   local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if nextHead and #nextHead >= 2 then
@@ -111,6 +111,17 @@ if not id or id == false then
   end
   return nil
 end
+
+local id = job.id
+local groupId = job.groupId
+local payload = job.payload
+local attempts = job.attempts
+local maxAttempts = job.maxAttempts
+local seq = job.seq
+local enq = job.timestamp
+local orderMs = job.orderMs
+local score = job.score
+local isFlowParent = job.isFlowParent
 
 -- [PHASE 2 MODIFICATION START]
 -- Push to group active list

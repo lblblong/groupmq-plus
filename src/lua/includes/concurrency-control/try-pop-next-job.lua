@@ -23,6 +23,7 @@
 ]]
 
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
+--- @include "includes/dal/fetch-job-data"
 
 local function tryPopNextJob(options)
   -- 参数解构
@@ -78,16 +79,23 @@ local function tryPopNextJob(options)
   local jobId = zpop[1]
   local jobKey = ns .. ":job:" .. jobId
 
-  -- [读取任务数据]
-  local job = redis.call("HMGET", jobKey, "id", "groupId", "data", "attempts", "maxAttempts", "seq", "timestamp", "orderMs", "score", "isFlowParent")
-  local id, retrievedGroupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent =
-    job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
-
-  -- [验证任务数据（处理损坏/缺失的任务 hash）]
-  if not id or id == false then
+  -- [读取并验证任务数据]
+  local job = fetchJobData({ ns = ns, jobId = jobId })
+  if not job then
     -- 任务 hash 缺失/损坏，返回 nil
     return nil
   end
+
+  local id = job.id
+  local retrievedGroupId = job.groupId
+  local payload = job.payload
+  local attempts = job.attempts
+  local maxAttempts = job.maxAttempts
+  local seq = job.seq
+  local enq = job.timestamp
+  local orderMs = job.orderMs
+  local score = job.score
+  local isFlowParent = job.isFlowParent
 
   -- [添加到活跃列表]
   redis.call("LPUSH", groupActiveKey, jobId)

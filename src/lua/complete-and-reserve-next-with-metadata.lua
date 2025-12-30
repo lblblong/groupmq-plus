@@ -3,6 +3,7 @@
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/flow/update-parent-flow"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/dal/fetch-job-data"
 
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
@@ -194,22 +195,32 @@ end
 
 local nextJobId = zpop[1]
 local nextJobKey = ns .. ":job:" .. nextJobId
-local job = redis.call("HMGET", nextJobKey, "id","groupId","data","attempts","maxAttempts","seq","timestamp","orderMs","score","isFlowParent")
-local id, groupId, payload, attempts, maxAttempts, seq, enq, orderMs, score, isFlowParent = job[1], job[2], job[3], job[4], job[5], job[6], job[7], job[8], job[9], job[10]
 
--- Validate job data exists (handle corrupted/missing job hash)
-if not id or id == false then
+-- Read and validate next job data
+local job = fetchJobData({ ns = ns, jobId = nextJobId })
+if not job then
   -- Job hash is missing/corrupted, clean up and return completion only
   -- Re-add next job to ready queue if exists
   local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if nextHead and #nextHead >= 2 then
     local nextScore = tonumber(nextHead[2])
-    redis.call("ZADD", readyKey, nextScore, groupId)
+    redis.call("ZADD", readyKey, nextScore, gid)
   end
-  
+
   -- Return nil to indicate no next job was reserved
   return nil
 end
+
+local id = job.id
+local groupId = job.groupId
+local payload = job.payload
+local attempts = job.attempts
+local maxAttempts = job.maxAttempts
+local seq = job.seq
+local enq = job.timestamp
+local orderMs = job.orderMs
+local score = job.score
+local isFlowParent = job.isFlowParent
 
 -- Push next job to active list (chaining)
 redis.call("LPUSH", groupActiveKey, id)

@@ -29,5 +29,3 @@ local function updateGroupConfig(opts)
     end
   end
 end
-
-return updateGroupConfig

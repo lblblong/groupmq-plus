@@ -188,7 +188,7 @@ export async function evalScript<T = any>(
     return res
   } catch (err: any) {
     if (!((err.message as string)?.includes('Connection is closed'))) {
-      console.log('执行脚本失败', err)
+      console.log(`执行脚本失败（${name}）`, err)
     }
     throw err;
   }
