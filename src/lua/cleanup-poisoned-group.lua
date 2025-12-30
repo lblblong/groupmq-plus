@@ -27,7 +27,7 @@ if lockValue then
 end
 
 -- Check if group is poisoned using centralized analysis module
-local isPoisoned = analyzeGroupPoisoning(ns, groupId)
+local isPoisoned = analyzeGroupPoisoning({ ns = ns, groupId = groupId })
 if isPoisoned then
   redis.call("ZREM", readyKey, groupId)
   redis.call("ZREM", limitedKey, groupId)

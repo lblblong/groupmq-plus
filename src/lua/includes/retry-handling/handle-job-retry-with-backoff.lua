@@ -1,11 +1,21 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/concurrency-control/is-group-at-capacity"
 
--- 入参: ns, jobId, groupId, token, backoffMs
+-- 入参:
+--   opts.ns: 命名空间
+--   opts.jobId: 任务ID
+--   opts.groupId: 群组ID
+--   opts.token: 处理令牌
+--   opts.backoffMs: 延迟时间（毫秒）
 -- 功能: 处理任务重试，包括令牌验证、尝试次数检查、延迟或立即重试
 -- 返回: -2 (token不匹配) | -1 (超过最大尝试次数) | attempts次数 (成功重试)
 
-local function handleJobRetryWithBackoff(ns, jobId, groupId, token, backoffMs)
+local function handleJobRetryWithBackoff(opts)
+  local ns = opts.ns
+  local jobId = opts.jobId
+  local groupId = opts.groupId
+  local token = opts.token
+  local backoffMs = opts.backoffMs
   local jobKey = ns .. ":job:" .. jobId
   local readyKey = ns .. ":ready"
   local limitedKey = ns .. ":limited"
@@ -84,7 +94,7 @@ local function handleJobRetryWithBackoff(ns, jobId, groupId, token, backoffMs)
     if head and #head >= 2 then
       local headScore = tonumber(head[2])
 
-      if isGroupAtCapacity(ns, groupId) then
+      if isGroupAtCapacity({ ns = ns, groupId = groupId }) then
         -- 群组已满，移到limited
         redis.call("ZREM", readyKey, groupId)
         redis.call("ZADD", limitedKey, headScore, groupId)

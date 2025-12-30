@@ -1,6 +1,6 @@
 -- Data Access Layer: ZSET Reader
 -- 统一的有序集合读取操作
--- 参数:
+-- 参数 (Table):
 --   key: Redis key (ZSET)
 --   operation: 'count' 或 'range'
 --   start: 开始索引 (用于 'range' 操作，可选)
@@ -9,7 +9,13 @@
 --   如果 operation == 'count': 返回集合中的元素数量
 --   如果 operation == 'range': 返回指定范围内的元素列表
 
-local function readZset(key, operation, start, stop)
+local function readZset(opts)
+  -- 解构参数
+  local key = opts.key
+  local operation = opts.operation
+  local start = opts.start
+  local stop = opts.stop
+
   if operation == 'count' then
     return redis.call("ZCARD", key)
   elseif operation == 'range' then

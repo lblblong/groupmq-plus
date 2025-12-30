@@ -15,7 +15,7 @@ local limitedKey = ns .. ":limited"
 local processingKey = ns .. ":processing"
 
 -- Respect paused state
-if isQueuePaused(ns) then
+if isQueuePaused({ ns = ns }) then
   return nil
 end
 
@@ -66,7 +66,7 @@ for i = 1, #groups, 2 do
     local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
     if nextHead and #nextHead >= 2 then
       local nextScore = tonumber(nextHead[2])
-      updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, nextScore)
+      updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = nextScore })
     end
 
     -- Return job data as formatted string
@@ -86,7 +86,7 @@ for i = 1, #groups, 2 do
       if head and #head >= 2 then
         local headScore = tonumber(head[2])
         if redis.call("ZCARD", gZ) > 0 then
-          updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, headScore)
+          updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
         end
       end
     end

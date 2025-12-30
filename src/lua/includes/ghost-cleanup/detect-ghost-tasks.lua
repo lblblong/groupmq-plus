@@ -2,15 +2,18 @@
   Check if a group has ghost tasks without cleaning them.
   Useful for debugging and monitoring.
 
-  Parameters:
-    ns: Redis namespace prefix
-    groupId: The group ID
-    processingKey: Optional override for processing key
+  @param options table 参数对象
+    - ns: string Redis namespace prefix
+    - groupId: string The group ID
+    - processingKey: string optional override for processing key (default: ns:processing)
 
-  Returns: Number of ghost tasks detected
+  @return number Number of ghost tasks detected
 ]]
-local function detectGhostTasks(ns, groupId, processingKey)
-  processingKey = processingKey or (ns .. ":processing")
+local function detectGhostTasks(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+  local processingKey = opts.processingKey or (ns .. ":processing")
+
   local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
 
   local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)

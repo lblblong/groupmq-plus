@@ -7,5 +7,9 @@
 local ns = KEYS[1]
 local ignoreDelayed = ARGV[1] or "0"
 local ignoreStaged = ARGV[2] or "0"
-return checkQueueEmpty(ns, ignoreDelayed, ignoreStaged)
+return checkQueueEmpty({
+  ns = ns,
+  ignoreDelayed = ignoreDelayed,
+  ignoreStaged = ignoreStaged
+})
 

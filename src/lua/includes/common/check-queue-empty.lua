@@ -8,13 +8,17 @@
 --   - 受限的群组 (limited)
 --   - 群组中的等待任务 (groups)
 -- 参数:
---   ns: 命名空间
---   ignoreDelayed: "1" 忽略延迟任务, "0" 检查延迟任务
---   ignoreStaged: "1" 忽略暂存任务, "0" 检查暂存任务
+--   opts.ns: 命名空间
+--   opts.ignoreDelayed: "1" 忽略延迟任务, "0" 检查延迟任务
+--   opts.ignoreStaged: "1" 忽略暂存任务, "0" 检查暂存任务
 -- 返回:
 --   1 if 队列为空, 0 if 队列非空
 
-local function checkQueueEmpty(ns, ignoreDelayed, ignoreStaged)
+local function checkQueueEmpty(opts)
+  local ns = opts.ns
+  local ignoreDelayed = opts.ignoreDelayed
+  local ignoreStaged = opts.ignoreStaged
+
   -- Check processing jobs (Active)
   local processingCount = redis.call("ZCARD", ns .. ":processing")
   if processingCount > 0 then

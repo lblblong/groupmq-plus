@@ -2,16 +2,18 @@
   Check if a group has reached its concurrency capacity
 
   Parameters:
-    ns: Redis namespace prefix
-    groupId: The group ID
+    opts.ns: Redis namespace prefix
+    opts.groupId: The group ID
 
   Returns: true if group is at or over capacity, false otherwise
 ]]
 --- @include "includes/concurrency-control/get-group-concurrency-limit"
 --- @include "includes/concurrency-control/get-group-active-count"
 
-local function isGroupAtCapacity(ns, groupId)
-  local limit = getGroupConcurrencyLimit(ns, groupId)
-  local activeCount = getGroupActiveCount(ns, groupId)
+local function isGroupAtCapacity(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+  local limit = getGroupConcurrencyLimit({ ns = ns, groupId = groupId })
+  local activeCount = getGroupActiveCount({ ns = ns, groupId = groupId })
   return activeCount >= limit
 end

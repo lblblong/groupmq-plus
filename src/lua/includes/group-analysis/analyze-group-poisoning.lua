@@ -1,14 +1,15 @@
 -- Group analysis module: Detect poisoned groups
 -- Purpose: Check if a group has any jobs that can still be processed
 --
--- Function: analyzeGroupPoisoning(ns, groupId)
--- Parameters:
---   ns: namespace (string)
---   groupId: group ID to analyze (string)
--- Returns:
---   boolean: true if group is poisoned (all jobs exhausted attempts), false if still has recoverable jobs
+-- @param options table 参数对象
+--   - ns: string namespace
+--   - groupId: string group ID to analyze
+-- @return boolean true if group is poisoned (all jobs exhausted attempts), false if still has recoverable jobs
 
-local function analyzeGroupPoisoning(ns, groupId)
+local function analyzeGroupPoisoning(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+
   local gZ = ns .. ":g:" .. groupId
 
   -- Get all jobs in the group

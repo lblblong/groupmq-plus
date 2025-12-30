@@ -44,7 +44,7 @@ local function tryPopNextJob(options)
   -- [清理幽灵任务]
   -- 只在 activeCount >= limit 时触发清理，避免正常流程中的性能影响
   if activeCount >= limit then
-    local ghostCount = detectGhostTasks(ns, groupId, processingKey)
+    local ghostCount = detectGhostTasks({ ns = ns, groupId = groupId, processingKey = processingKey })
     if ghostCount > 0 then
       -- 移除所有幽灵任务
       local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)

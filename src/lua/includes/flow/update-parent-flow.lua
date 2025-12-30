@@ -71,7 +71,7 @@ local function updateParentFlow(options)
       if pHead and #pHead >= 2 then
         local pHeadScore = tonumber(pHead[2])
         -- 使用头部分数来表示群组中最早的任务
-        updateGroupReadyLimitedState(ns, parentGroupId, readyKey, limitedKey, pHeadScore)
+        updateGroupReadyLimitedState({ ns = ns, groupId = parentGroupId, readyKey = readyKey, limitedKey = limitedKey, headScore = pHeadScore })
       end
     end
   end

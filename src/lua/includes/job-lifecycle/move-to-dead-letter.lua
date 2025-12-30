@@ -66,7 +66,7 @@ local function moveToDeadLetter(ns, jobId, groupId, token)
       local headScore = tonumber(head[2])
 
       -- [LIMITED GROUP SET] 检查是否可以从limited移动到ready
-      updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
+      updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
     end
   end
 

@@ -69,7 +69,7 @@ local function tryTriggerStalledCheck(ns, now, vt, readyKey, limitedKey, process
           local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
           if head and #head >= 2 then
             local headScore = tonumber(head[2])
-            updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, headScore)
+            updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
           end
         end
         -- Remove from active list to prevent ghost concurrency

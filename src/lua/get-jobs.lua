@@ -27,17 +27,30 @@ end
 if jobType == 'active' then
   -- 从 processing 有序集合获取
   local processingKey = ns .. ":processing"
-  return readZset(processingKey, 'range', start, stop)
+  return readZset({
+    key = processingKey,
+    operation = 'range',
+    start = start,
+    stop = stop
+  })
   
 elseif jobType == 'waiting' then
   -- 从所有群组获取 (iterate-groups 目前不支持分页，返回全部)
   -- TODO: 如需分页支持，需扩展 iterate-groups
-  return iterateGroups(ns, 'list')
+  return iterateGroups({
+    ns = ns,
+    operation = 'list'
+  })
   
 elseif jobType == 'delayed' then
   -- 从 delayed 有序集合获取
   local delayedKey = ns .. ":delayed"
-  return readZset(delayedKey, 'range', start, stop)
+  return readZset({
+    key = delayedKey,
+    operation = 'range',
+    start = start,
+    stop = stop
+  })
   
 else
   error("Invalid type: " .. jobType .. ". Expected 'active', 'waiting', or 'delayed'")

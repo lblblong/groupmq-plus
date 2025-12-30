@@ -49,7 +49,7 @@ local function promoteDelayedJobToWaiting(options)
   local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if head and #head >= 2 then
     local headScore = tonumber(head[2])
-    updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
+    updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
   end
 
   return "promoted"

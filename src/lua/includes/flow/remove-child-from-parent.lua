@@ -1,21 +1,29 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
--- Flow relationship module: Remove child from parent
--- Purpose: Handle removal of a child task from its parent, including flow completion logic
---
--- Function: removeChildFromParent(ns, parentId, childId)
--- Parameters:
---   ns: namespace (string)
---   parentId: parent task ID (string)
---   childId: child task ID to remove (string)
--- Returns:
---   boolean: true if parent needs to be promoted (all children resolved)
+--[[
+  Flow relationship module: Remove child from parent
+  Purpose: Handle removal of a child task from its parent, including flow completion logic
 
-local function removeChildFromParent(ns, parentId, childId)
+  @param options table 参数对象
+    - ns: string 命名空间
+    - parentId: string 父任务ID
+    - childId: string 要移除的子任务ID
+    - readyKey: string 就绪队列的 key
+    - limitedKey: string 限流队列的 key
+
+  @return boolean true if parent needs to be promoted (all children resolved)
+]]
+
+local function removeChildFromParent(options)
+  -- 参数解构
+  local ns = options.ns
+  local parentId = options.parentId
+  local childId = options.childId
+  local readyKey = options.readyKey
+  local limitedKey = options.limitedKey
+
   local parentKey = ns .. ":job:" .. parentId
   local parentChildrenKey = ns .. ":flow:children:" .. parentId
-  local readyKey = ns .. ":ready"
-  local limitedKey = ns .. ":limited"
 
   -- Remove child from parent's children set
   local removedFromSet = redis.call("SREM", parentChildrenKey, childId)
@@ -52,7 +60,7 @@ local function removeChildFromParent(ns, parentId, childId)
         local pHead = redis.call("ZRANGE", pGZ, 0, 0, "WITHSCORES")
         if pHead and #pHead >= 2 then
           local pHeadScore = tonumber(pHead[2])
-          updateGroupReadyLimitedState(ns, parentGroupId, readyKey, limitedKey, pHeadScore)
+          updateGroupReadyLimitedState({ ns = ns, groupId = parentGroupId, readyKey = readyKey, limitedKey = limitedKey, headScore = pHeadScore })
         end
       end
 

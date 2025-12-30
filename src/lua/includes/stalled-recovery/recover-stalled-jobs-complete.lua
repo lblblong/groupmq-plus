@@ -98,7 +98,7 @@ local function recoverStalledJobsCompletely(ns, now, gracePeriod, maxStalledCoun
                 local headScore = tonumber(head[2])
 
                 -- 检查群组容量，决定是否进入ready或limited
-                updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, headScore)
+                updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
               end
               redis.call("SADD", groupsKey, groupId)
               table.insert(results, jobId)

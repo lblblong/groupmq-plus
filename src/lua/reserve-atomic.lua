@@ -18,7 +18,7 @@ local groupActiveKey = ns .. ":g:" .. targetGroupId .. ":active"
 local configKey = ns .. ":config:" .. targetGroupId
 
 -- Respect paused state
-if isQueuePaused(ns) then
+if isQueuePaused({ ns = ns }) then
   return nil
 end
 
@@ -31,7 +31,7 @@ local processingKey = ns .. ":processing"
 -- [LAZY CLEANUP START: Clean up ghost tasks from active list]
 -- Only trigger cleanup when activeCount >= limit to avoid performance impact on happy path
 if activeCount >= limit then
-  local ghostCount = detectGhostTasks(ns, targetGroupId, processingKey)
+  local ghostCount = detectGhostTasks({ ns = ns, groupId = targetGroupId, processingKey = processingKey })
   if ghostCount > 0 then
     -- Remove all ghost tasks from active list
     local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
@@ -75,7 +75,7 @@ if not canReserve then
     -- Check if group has any waiting tasks
     if redis.call("ZCARD", gZ) > 0 then
       -- Move to limited instead of ready
-      updateGroupReadyLimitedState(ns, targetGroupId, readyKey, limitedKey, headScore)
+      updateGroupReadyLimitedState({ ns = ns, groupId = targetGroupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
     end
   end
   -- [PHASE 2 MODIFICATION] 返回明确的 E_LIMIT 标识（并发已满）

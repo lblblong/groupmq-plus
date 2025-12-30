@@ -235,7 +235,7 @@ local currentActive = redis.call("LLEN", groupActiveKey)
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextHeadScore = tonumber(nextHead[2])
-  updateGroupReadyLimitedState(ns, groupId, readyKey, limitedKey, nextHeadScore)
+  updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = nextHeadScore })
 else
   -- No more jobs in gZ
   redis.call("ZREM", readyKey, groupId)

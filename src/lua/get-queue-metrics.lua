@@ -21,18 +21,27 @@ local types = ARGV[1]
 -- 获取 active 数量 (processing 队列)
 local function getActiveCount()
   local processingKey = ns .. ":processing"
-  return readZset(processingKey, 'count')
+  return readZset({
+    key = processingKey,
+    operation = 'count'
+  })
 end
 
 -- 获取 waiting 数量 (所有群组中的任务)
 local function getWaitingCount()
-  return iterateGroups(ns, 'count')
+  return iterateGroups({
+    ns = ns,
+    operation = 'count'
+  })
 end
 
 -- 获取 delayed 数量
 local function getDelayedCount()
   local delayedKey = ns .. ":delayed"
-  return readZset(delayedKey, 'count')
+  return readZset({
+    key = delayedKey,
+    operation = 'count'
+  })
 end
 
 -- 根据 types 参数决定返回内容

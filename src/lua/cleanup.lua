@@ -28,7 +28,7 @@ for _, jobId in ipairs(expiredJobs) do
 
       if jobScore then
         -- Use centralized recovery module
-        recoverSingleJob(ns, jobId, gid, jobScore, delayUntil, now, readyKey, limitedKey, processingKey)
+        recoverSingleJob({ ns = ns, jobId = jobId, groupId = gid, jobScore = jobScore, delayUntil = delayUntil, now = now, readyKey = readyKey, limitedKey = limitedKey, processingKey = processingKey })
         cleaned = cleaned + 1
       end
     end
