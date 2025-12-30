@@ -1,5 +1,6 @@
 --- @include "includes/job-lifecycle/store-job"
 --- @include "includes/group-state/add-job-to-group"
+--- @include "includes/group-state/update-group-config"
 
 -- argv: ns, groupId, dataJson, maxAttempts, orderMs, delayUntil, jobId, keepCompleted, clientTimestamp, orderingDelayMs, groupConfigJson
 local ns = KEYS[1]
@@ -15,22 +16,11 @@ local orderingDelayMs = tonumber(ARGV[9]) or 0
 local groupConfigJson = ARGV[10]
 
 -- Step 1: Update group config
-if groupConfigJson and groupConfigJson ~= "" and groupConfigJson ~= "null" then
-  local status, config = pcall(cjson.decode, groupConfigJson)
-  if status and config then
-    local configKey = ns .. ":config:" .. groupId
-    local args = {}
-    for k, v in pairs(config) do
-      if v ~= nil then
-        table.insert(args, k)
-        table.insert(args, tostring(v))
-      end
-    end
-    if #args > 0 then
-      redis.call("HMSET", configKey, unpack(args))
-    end
-  end
-end
+updateGroupConfig({
+  ns = ns,
+  groupId = groupId,
+  configJson = groupConfigJson
+})
 
 local jobKey = ns .. ":job:" .. jobId
 

@@ -1,5 +1,6 @@
 --- @include "includes/job-lifecycle/store-job"
 --- @include "includes/group-state/add-job-to-group"
+--- @include "includes/group-state/update-group-config"
 
 -- Atomic Flow Creation
 -- KEYS: [ns]
@@ -25,22 +26,11 @@ end
 redis.call("SET", uniqueKey, parentId)
 
 -- Update Parent group config
-if parentGroupConfig and parentGroupConfig ~= "" and parentGroupConfig ~= "null" then
-  local status, config = pcall(cjson.decode, parentGroupConfig)
-  if status and config then
-    local configKey = ns .. ":config:" .. parentGroupId
-    local args = {}
-    for k, v in pairs(config) do
-      if v ~= nil then
-        table.insert(args, k)
-        table.insert(args, tostring(v))
-      end
-    end
-    if #args > 0 then
-      redis.call("HMSET", configKey, unpack(args))
-    end
-  end
-end
+updateGroupConfig({
+  ns = ns,
+  groupId = parentGroupId,
+  configJson = parentGroupConfig
+})
 
 -- Calculate children count
 local childrenCount = (#ARGV - 7) / 7
@@ -85,22 +75,11 @@ for i = 0, childrenCount - 1 do
   local childGroupConfig = ARGV[offset + 7]
 
   -- Update Child group config
-  if childGroupConfig and childGroupConfig ~= "" and childGroupConfig ~= "null" then
-    local status, config = pcall(cjson.decode, childGroupConfig)
-    if status and config then
-      local configKey = ns .. ":config:" .. childGroupId
-      local args = {}
-      for k, v in pairs(config) do
-        if v ~= nil then
-          table.insert(args, k)
-          table.insert(args, tostring(v))
-        end
-      end
-      if #args > 0 then
-        redis.call("HMSET", configKey, unpack(args))
-      end
-    end
-  end
+  updateGroupConfig({
+    ns = ns,
+    groupId = childGroupId,
+    configJson = childGroupConfig
+  })
 
   -- Store child job using storeJob module
   local childKey = ns .. ":job:" .. childId
