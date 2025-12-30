@@ -9,6 +9,8 @@ local function deleteJobCompletely(ns, jobId)
   local jobKey = ns .. ":job:" .. jobId
   local delayedKey = ns .. ":delayed"
   local processingKey = ns .. ":processing"
+  local readyKey = ns .. ":ready"
+  local limitedKey = ns .. ":limited"
 
   -- 如果任务不存在，返回0
   if redis.call("EXISTS", jobKey) == 0 then
@@ -46,7 +48,10 @@ local function deleteJobCompletely(ns, jobId)
     end
 
     -- 使用cleanup helper处理群组清理和ready/limited队列更新
-    cleanupIfGroupEmpty(ns, groupId)
+    cleanupIfGroupEmpty({
+      ns = ns,
+      groupId = groupId
+    })
   end
 
   -- 删除任务散列、flow结果和子任务跟踪
@@ -58,7 +63,7 @@ local function deleteJobCompletely(ns, jobId)
 
   -- 清理flow关系：如果此任务是子任务，从父任务的子任务集中移除
   if parentId then
-    removeChildFromParent(ns, parentId, jobId)
+    removeChildFromParent({ ns = ns, parentId = parentId, childId = jobId, readyKey = readyKey, limitedKey = limitedKey })
   end
 
   return "deleted"

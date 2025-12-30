@@ -2,14 +2,17 @@
 -- Purpose: Check if a group is empty and clean up its metadata if so
 -- If group is not empty, removes it from ready/limited queues for later re-evaluation
 --
--- Function: cleanupIfGroupEmpty(ns, groupId)
+-- Function: cleanupIfGroupEmpty(opts)
 -- Parameters:
---   ns: namespace (string)
---   groupId: group ID to check and potentially clean up (string)
+--   opts.ns: namespace (string)
+--   opts.groupId: group ID to check and potentially clean up (string)
 -- Returns:
 --   string: "cleaned" if group was completely cleaned up, "not-empty" if group still has jobs
 
-local function cleanupIfGroupEmpty(ns, groupId)
+local function cleanupIfGroupEmpty(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+
   local gZ = ns .. ":g:" .. groupId
   local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
   local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"

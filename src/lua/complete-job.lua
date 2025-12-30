@@ -95,11 +95,14 @@ if nextJobId then
   local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
   if nextHead and #nextHead >= 2 then
     local nextScore = tonumber(nextHead[2])
-    updateGroupReadyLimitedState(ns, gid, readyKey, limitedKey, nextScore)
+    updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = nextScore })
   end
 else
   -- 没有更多任务，清理群组
-  cleanupIfGroupEmpty(ns, gid)
+  cleanupIfGroupEmpty({
+    ns = ns,
+    groupId = gid
+  })
 end
 
 -- Part 2: 如果这是子任务，更新父任务流

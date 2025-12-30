@@ -49,7 +49,10 @@ for i = 1, #ids do
     end
 
     -- Use cleanup helper to handle group cleanup and ready/limited updates
-    cleanupIfGroupEmpty(ns, groupId)
+    cleanupIfGroupEmpty({
+      ns = ns,
+      groupId = groupId
+    })
   end
 
   -- Delete job hash, idempotence key, flow results and children tracking (variadic DEL optimization)
@@ -62,7 +65,7 @@ for i = 1, #ids do
 
   -- If this job is a child, remove it from parent's children set using the dedicated module
   if parentId then
-    removeChildFromParent(ns, parentId, id)
+    removeChildFromParent({ ns = ns, parentId = parentId, childId = id, readyKey = readyKey, limitedKey = limitedKey })
   end
 
   removed = removed + 1

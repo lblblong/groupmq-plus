@@ -53,10 +53,13 @@ if newDelayUntil > 0 and newDelayUntil > now then
   redis.call("ZREM", gZ, jobId)
 
   -- Use centralized cleanup module to handle group state
-  cleanupIfGroupEmpty(ns, groupId)
+  cleanupIfGroupEmpty({
+    ns = ns,
+    groupId = groupId
+  })
 else
   -- Job should be ready immediately: promote using standard function
-  promoteDelayedJobToWaiting(ns, jobId, delayedKey, readyKey, limitedKey)
+  promoteDelayedJobToWaiting({ ns = ns, jobId = jobId, delayedKey = delayedKey, readyKey = readyKey, limitedKey = limitedKey })
 end
 
 return 1
