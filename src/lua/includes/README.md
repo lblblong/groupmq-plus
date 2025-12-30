@@ -1,207 +1,197 @@
-# Lua Includes - GroupMQ+ 核心方法库
+# Lua Includes - 函数索引
 
-本目录包含 GroupMQ+ Redis Lua 脚本所需的所有辅助函数和工具库。这些模块组织了系统的核心功能模块。
+本目录包含所有可复用的 Lua 函数模块。
 
-## 目录结构
+## 文件结构概览
 
-```
-includes/
-├── concurrency-control/      # 并发控制
-├── delayed-handling/         # 延迟处理
-├── ghost-cleanup/            # 幽灵任务清理
-├── group-lifecycle/          # 组生命周期
-├── group-status/             # 组状态查询
-├── job-data/                 # 任务数据处理
-├── job-lifecycle/            # 任务生命周期
-├── key-helpers/              # Redis 键构建
-├── retry-handling/           # 重试处理
-└── stalled-recovery/         # 卡滞恢复
-```
+- **common/** - 通用工具函数
+- **concurrency-control/** - 并发控制相关函数
+- **dal/** - 数据访问层函数
+- **delayed-handling/** - 延迟任务处理函数
+- **flow/** - 流程管理函数
+- **ghost-cleanup/** - 幽灵任务清理函数
+- **group-analysis/** - 群组分析函数
+- **group-lifecycle/** - 群组生命周期管理函数
+- **group-state/** - 群组状态管理函数
+- **group-status/** - 群组状态查询函数
+- **job-lifecycle/** - 任务生命周期管理函数
+- **job-recovery/** - 任务恢复函数
+- **retry-handling/** - 重试处理函数
+- **security/** - 安全验证函数
+- **stalled-recovery/** - 卡住任务恢复函数
 
-## 模块详情
+## 函数索引
 
-### 1. 并发控制 (concurrency-control/)
+### 通用工具函数 (common/)
 
-处理组并发限制和容量管理。
+- **checkQueueEmpty** (`common/check-queue-empty.lua`)
+  - 检查队列是否为空
+  - 被调用于：is-empty.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `getGroupConcurrencyLimit` | get-group-concurrency-limit.lua | 获取组并发限制数 (默认为 1) |
-| `getGroupActiveCount` | get-group-active-count.lua | 获取当前活跃任务数 |
-| `isGroupAtCapacity` | is-group-at-capacity.lua | 检查组是否已达容量 |
+- **isQueuePaused** (`common/is-queue-paused.lua`)
+  - 检查队列是否暂停
+  - 被调用于：reserve.lua, reserve-atomic.lua, reserve-batch.lua
 
-### 2. 延迟处理 (delayed-handling/)
+### 并发控制 (concurrency-control/)
 
-处理任务延迟和定时晋升。
+- **getGroupActiveCount** (`concurrency-control/get-group-active-count.lua`)
+  - 获取群组的活跃任务数量
+  - 被调用于：is-group-at-capacity.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `promoteJobFromDelayed` | promote-job-from-delayed.lua | 从延迟集合晋升任务到等待集合 |
-| `promoteDelayedJobToWaiting` | promote-delayed-job-complete.lua | 完整的延迟任务晋升流程，包括状态更新和组状态调整 |
+- **getGroupConcurrencyLimit** (`concurrency-control/get-group-concurrency-limit.lua`)
+  - 获取群组的并发限制
+  - 被调用于：is-group-at-capacity.lua
 
-### 3. 幽灵任务清理 (ghost-cleanup/)
+- **isGroupAtCapacity** (`concurrency-control/is-group-at-capacity.lua`)
+  - 检查群组是否达到并发容量限制
+  - 被调用于：try-pop-next-job.lua, enqueue-batch.lua, retry.lua
 
-检测和处理无效或孤立的任务。
+- **tryPopNextJob** (`concurrency-control/try-pop-next-job.lua`)
+  - 原子化地从群组中取出下一个任务
+  - 被调用于：reserve.lua, reserve-batch.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `detectGhostTasks` | detect-ghost-tasks.lua | 检测组中缺失处理记录的幽灵任务 (仅检测，不清理) |
+### 数据访问层 (dal/)
 
-### 4. 组生命周期 (group-lifecycle/)
+- **iterateGroups** (`dal/iterate-groups.lua`)
+  - 迭代所有群组
+  - 被调用于：get-jobs.lua, get-queue-metrics.lua
 
-管理组的创建、状态转换和清理。
+- **readSet** (`dal/read-set.lua`)
+  - 读取 Redis Set 数据结构
+  - 被调用于：get-unique-groups.lua, get-unique-groups-count.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `updateGroupReadyLimitedState` | update-group-ready-limited-state.lua | 根据活跃计数和容量，自动将组置于 ready 或 limited 队列 |
+- **readZset** (`dal/read-zset.lua`)
+  - 读取 Redis Sorted Set 数据结构
+  - 被调用于：get-jobs.lua, get-queue-metrics.lua
 
-### 5. 组状态查询 (group-status/)
+### 延迟任务处理 (delayed-handling/)
 
-查询组的实时状态信息。
+- **promoteDelayedJobToWaiting** (`delayed-handling/promote-delayed-job-complete.lua`)
+  - 将延迟任务晋升到等待状态
+  - 被调用于：promote-delayed.lua, change-delay.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `getGroupJobCount` | get-group-job-count.lua | 获取组中待处理任务总数 |
-| `getGroupHeadJob` | get-group-head-job.lua | 获取组中的头部任务 (下一个待处理) |
-| `getGroupActiveTaskCount` | get-group-active-task-count.lua | 获取组中当前正在处理的任务数 |
+### 流程管理 (flow/)
 
-### 6. 任务数据处理 (job-data/)
+- **removeChildFromParent** (`flow/remove-child-from-parent.lua`)
+  - 从父任务中移除子任务
+  - 被调用于：delete-job-completely.lua, clean-status.lua
 
-处理任务数据的序列化和解析。
+- **updateParentFlow** (`flow/update-parent-flow.lua`)
+  - 更新父任务的流程状态
+  - 被调用于：complete-job.lua, complete-and-reserve-next-with-metadata.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `getJobFullData` | get-job-full-data.lua | 读取任务的 10 个核心字段 (id, groupId, data, attempts, maxAttempts, seq, timestamp, orderMs, score, isFlowParent) |
-| `parseJobData` | parse-job-data.lua | 将数组格式的任务数据转换为具名对象 |
+### 幽灵任务清理 (ghost-cleanup/)
 
-### 7. 任务生命周期 (job-lifecycle/)
+- **detectGhostTasks** (`ghost-cleanup/detect-ghost-tasks.lua`)
+  - 检测并标记幽灵任务
+  - 被调用于：try-pop-next-job.lua, reserve-atomic.lua
 
-管理单个任务的完整生命周期。
+### 群组分析 (group-analysis/)
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `deleteJobCompletely` | delete-job-completely.lua | 完整删除任务及其所有关联数据 (包括 flow 关系、组状态更新等) |
-| `recordJobFinalization` | record-job-finalization.lua | 原子性记录任务完成/失败状态，应用保留策略并发布事件 |
+- **analyzeGroupPoisoning** (`group-analysis/analyze-group-poisoning.lua`)
+  - 分析群组是否被"毒害"（毒害群组：所有任务都失败的群组）
+  - 被调用于：cleanup-poisoned-group.lua
 
-### 8. Redis 键构建工具 (key-helpers/)
+### 群组生命周期管理 (group-lifecycle/)
 
-统一构建各类 Redis 键名，确保命名一致。
+- **cleanupIfGroupEmpty** (`group-lifecycle/cleanup-if-group-empty.lua`)
+  - 如果群组为空，则清理群组
+  - 被调用于：delete-job-completely.lua, complete-job.lua, change-delay.lua, clean-status.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `makeGroupKey` | make-group-key.lua | 构造组的任务集合键 (e.g., "ns:g:groupId") |
-| `makeActiveListKey` | make-active-list-key.lua | 构造组的活跃列表键 (e.g., "ns:g:groupId:active") |
-| `makeConfigKey` | make-config-key.lua | 构造组配置键 (e.g., "ns:config:groupId") |
-| `makeGroupMetaKey` | make-group-meta-key.lua | 构造组元数据键 (e.g., "ns:g:groupId:meta") |
-| `makeGroupLockKey` | make-group-lock-key.lua | 构造组锁键 (e.g., "ns:lock:groupId") |
-| `makeJobKey` | make-job-key.lua | 构造任务数据哈希键 (e.g., "ns:job:jobId") |
-| `makeProcessingKey` | make-processing-key.lua | 构造任务处理锁键 (e.g., "ns:processing:jobId") |
-| `makeUniqueKey` | make-unique-key.lua | 构造任务幂等性键 (e.g., "ns:unique:jobId") |
+- **updateGroupReadyLimitedState** (`group-lifecycle/update-group-ready-limited-state.lua`)
+  - 更新群组的就绪/限制状态（核心函数，被广泛使用）
+  - 被调用于：reserve.lua, reserve-atomic.lua, reserve-batch.lua, promote-delayed.lua, complete-job.lua, complete-and-reserve-next-with-metadata.lua, promote-staged.lua, enqueue-batch.lua, try-trigger-stalled-check.lua, recover-stalled-jobs-complete.lua, retry.lua
 
-### 9. 重试处理 (retry-handling/)
+### 群组状态管理 (group-state/)
 
-处理任务重试和回退策略。
+- **addJobToGroup** (`group-state/add-job-to-group.lua`)
+  - 将任务添加到群组
+  - 被调用于：enqueue.lua, enqueue-batch.lua, enqueue-flow.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `handleJobRetryWithBackoff` | handle-job-retry-with-backoff.lua | 处理任务重试，支持令牌验证、尝试次数检查、延迟或立即重试 |
+- **removeJobFromActive** (`group-state/remove-job-from-active.lua`)
+  - 从活跃集合中移除任务
+  - 被调用于：complete-job.lua, complete-and-reserve-next-with-metadata.lua
 
-### 10. 卡滞恢复 (stalled-recovery/)
+### 群组状态查询 (group-status/)
 
-检测和恢复卡滞的任务。
+- **getGroupHeadJob** (`group-status/get-group-head-job.lua`)
+  - 获取群组的头部任务
+  - 被调用于：complete-job.lua
 
-| 函数名 | 文件 | 说明 |
-|--------|------|------|
-| `recoverStalledJobsCompletely` | recover-stalled-jobs-complete.lua | 查询过期任务，判断是否应失败或恢复，支持延迟任务的状态保持 |
+### 任务生命周期管理 (job-lifecycle/)
 
-## 使用指南
+- **storeJob** (`job-lifecycle/store-job.lua`)
+  - 存储任务数据到 Redis
+  - 被调用于：enqueue.lua, enqueue-batch.lua, enqueue-flow.lua
 
-### 导入方式
+- **moveToDeadLetter** (`job-lifecycle/move-to-dead-letter.lua`)
+  - 将任务移到死信队列
+  - 被调用于：dead-letter.lua
 
-在主 Lua 脚本中使用 `@include` 指令导入所需函数：
+- **recordJobFinalization** (`job-lifecycle/record-job-finalization.lua`)
+  - 记录任务最终化信息
+  - 被调用于：complete-job.lua
 
-```lua
---- @include "includes/concurrency-control/get-group-concurrency-limit"
---- @include "includes/group-lifecycle/update-group-ready-limited-state"
+- **deleteJobCompletely** (`job-lifecycle/delete-job-completely.lua`)
+  - 完全删除任务
+  - 被调用于：remove.lua
 
--- 现在可以使用 getGroupConcurrencyLimit 和 updateGroupReadyLimitedState
-```
+### 任务恢复 (job-recovery/)
 
-### 依赖关系
+- **recoverSingleJob** (`job-recovery/recover-single-job.lua`)
+  - 恢复单个任务
+  - 被调用于：cleanup.lua
 
-某些函数依赖其他函数。导入时需要确保依赖的函数也被导入。例如：
+### 重试处理 (retry-handling/)
 
-- `isGroupAtCapacity` 依赖 `getGroupConcurrencyLimit` 和 `getGroupActiveCount`
-- `updateGroupReadyLimitedState` 依赖 `isGroupAtCapacity`
-- `handleJobRetryWithBackoff` 依赖 `isGroupAtCapacity` 和 `updateGroupReadyLimitedState`
+- **handleJobRetryWithBackoff** (`retry-handling/handle-job-retry-with-backoff.lua`)
+  - 使用退避算法处理任务重试
+  - 被调用于：retry.lua
 
-### 参数约定
+### 安全验证 (security/)
 
-所有函数遵循以下参数约定：
+- **verifyToken** (`security/verify-token.lua`)
+  - 验证请求令牌
+  - 被调用于：complete-job.lua, complete-and-reserve-next-with-metadata.lua
 
-- **ns**: Redis 命名空间前缀 (e.g., "myqueue")
-- **groupId**: 任务组标识符
-- **jobId**: 任务唯一标识符
-- **Redis Keys**: 预构造的 Redis 键名 (可选，若不提供会自动生成)
+### 卡住任务恢复 (stalled-recovery/)
 
-### 返回值
+- **recoverStalledJobsCompletely** (`stalled-recovery/recover-stalled-jobs-complete.lua`)
+  - 完全恢复所有卡住的任务
+  - 被调用于：check-stalled.lua
 
-函数返回值类型多样：
+- **tryTriggerStalledCheck** (`stalled-recovery/try-trigger-stalled-check.lua`)
+  - 尝试触发卡住任务检查
+  - 被调用于：reserve.lua, reserve-batch.lua
 
-- **数字**: 计数或状态码 (e.g., `-1` 失败, `-2` 令牌错误, `0` 未找到)
-- **字符串**: 状态描述 (e.g., "promoted", "deleted", "recorded")
-- **数组/表**: 结构化数据或多条记录
-- **nil**: 未找到或不适用
+## 统计信息
 
-## 核心工作流
+- **总函数数**：29
+- **被使用的函数**：28（96.6%）
+- **未被使用的函数**：1
+  - `promoteJobFromDelayed` (delayed-handling/promote-job-from-delayed.lua) - 已被 `promoteDelayedJobToWaiting` 替代
 
-### 1. 任务入队
-1. 使用 `makeGroupKey` 构造组键
-2. 使用 `makeJobKey` 构造任务键
-3. 检查 `isGroupAtCapacity` 决定是否加入 ready 或 limited 队列
-4. 使用 `updateGroupReadyLimitedState` 更新组状态
+## 关键函数
 
-### 2. 任务执行
-1. 获取组的头部任务: `getGroupHeadJob`
-2. 获取任务完整数据: `getJobFullData` + `parseJobData`
-3. 移到活跃列表
-4. 执行任务处理
+### 最常被调用的函数
 
-### 3. 任务完成
-1. 使用 `recordJobFinalization` 记录完成状态
-2. 使用 `deleteJobCompletely` 清理任务数据
-3. 使用 `updateGroupReadyLimitedState` 更新组状态
+- **updateGroupReadyLimitedState** - 11+ 处调用
+  - 核心函数，用于管理群组的就绪状态和并发限制
 
-### 4. 失败重试
-1. 调用 `handleJobRetryWithBackoff` 处理重试
-2. 若支持延迟，任务进入延迟集合
-3. 定期使用 `promoteDelayedJobToWaiting` 晋升就绪任务
+- **isGroupAtCapacity** - 3+ 处调用
+  - 并发控制的关键检查
 
-### 5. 卡滞恢复
-1. 定期调用 `recoverStalledJobsCompletely`
-2. 系统自动判断任务是否应失败或恢复
+- **tryPopNextJob** - 2+ 处调用
+  - 原子化任务出队操作
 
-## 总函数数：24 个
+- **removeChildFromParent** - 2+ 处调用
+  - 流程任务的清理
 
-### 按调用频率分类
+### 功能分类的关键函数
 
-| 级别 | 函数名 | 调用次数 |
-|-----|--------|---------|
-| 核心 | `updateGroupReadyLimitedState` | 17 |
-| 常用 | `getGroupActiveCount`, `detectGhostTasks`, `isGroupAtCapacity`, `getGroupConcurrencyLimit`, `getJobFullData`, `promoteDelayedJobToWaiting` | 2-3 |
-| 标准 | `recordJobFinalization`, `handleJobRetryWithBackoff`, `deleteJobCompletely`, `promoteJobFromDelayed`, `recoverStalledJobsCompletely` | 1-2 |
-| 工具 | Redis 键构建函数、数据解析函数、查询函数 | 按需调用 |
-
-## 性能考虑
-
-1. **原子性**: 所有关键操作都在 Lua 脚本中原子执行，避免竞态条件
-2. **批量操作**: 使用 Redis 多参数命令减少往返
-3. **缓存**: 传递已计算的参数 (如 headScore) 避免重复计算
-4. **索引**: Redis 有序集合实现高效的先进先出和优先级队列
-
-## 维护说明
-
-- 此目录中的所有方法已被深度集成，修改需谨慎
-- 新增功能应遵循现有命名和参数约定
-- 所有函数应包含文档注释，说明参数和返回值
-- 复杂函数应使用 `@include` 指令明确声明依赖
+- **入队操作**：storeJob, addJobToGroup
+- **出队操作**：tryPopNextJob, updateGroupReadyLimitedState
+- **任务完成**：recordJobFinalization, removeJobFromActive, cleanupIfGroupEmpty
+- **流程管理**：removeChildFromParent, updateParentFlow
+- **并发控制**：isGroupAtCapacity, getGroupActiveCount, getGroupConcurrencyLimit
+- **故障恢复**：detectGhostTasks, recoverSingleJob, recoverStalledJobsCompletely
