@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { getWorkersStatus } from '../../src';
 
 describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
@@ -314,7 +314,8 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
 
     const workerPromise = worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 使用状态轮询等待任务开始
+    await waitUntil(() => jobStartTime !== null, 2000);
     expect(jobStartTime).not.toBeNull();
     expect(jobCompleted).toBe(false);
 
@@ -396,7 +397,7 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
     const worker = createWorker({
       queue: queue,
       logger: true,
-      handler: async (job) => {
+      handler: async (_job) => {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         isCompleted = true;
       },
@@ -406,8 +407,11 @@ describe('优雅关闭测试 (Graceful Shutdown Tests)', () => {
       console.log('Completed', job.id);
     });
     worker.run();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await worker.close(500);
+
+    // 使用状态轮询等待任务开始处理
+    await waitUntil(() => worker.isProcessing(), 2000);
+
+    await worker.close(2000);
     expect(isCompleted).toBe(true);
     expect(worker.isProcessing()).toBe(false);
     expect(worker.getCurrentJob()).toBe(null);

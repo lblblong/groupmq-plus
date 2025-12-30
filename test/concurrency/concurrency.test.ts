@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 
 describe('Concurrency and Race Condition Tests', () => {
   test('should handle multiple workers distributing across different groups with atomic completion', async ({ createQueue, createWorker }) => {
@@ -201,7 +201,8 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // 使用状态轮询等待 worker 关闭
+    await waitUntil(() => worker.isClosed, 2000);
 
     const worker2 = createWorker({
       queue: q,
@@ -213,7 +214,8 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker2.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // 使用 waitForEmpty 等待队列清空
+    await q.waitForEmpty({ timeoutMs: 3000 });
 
     expect(processed.length).toBeGreaterThanOrEqual(4);
   });
@@ -250,7 +252,8 @@ describe('Concurrency and Race Condition Tests', () => {
 
     const enqueueTime = Date.now() - start;
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // 使用 waitForEmpty 等待队列清空
+    await q.waitForEmpty({ timeoutMs: 5000 });
 
     expect(processed.length).toBe(100);
 
@@ -298,7 +301,8 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // 使用 waitForEmpty 等待队列清空
+    await q.waitForEmpty({ timeoutMs: 5000 });
 
     expect(processed.length).toBe(20);
 
@@ -355,7 +359,8 @@ describe('Concurrency and Race Condition Tests', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // 使用状态轮询等待所有任务处理完成
+    await waitUntil(() => processed.length >= 4, 5000);
 
     expect(processed).toContain('A1');
     expect(processed).toContain('B1');
@@ -397,7 +402,8 @@ describe('Group Concurrency', () => {
 
     worker.run();
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // 使用 waitForEmpty 等待队列清空
+    await queue.waitForEmpty({ timeoutMs: 5000 });
     clearInterval(interval);
 
     console.log('Max concurrent jobs observed:', maxConcurrent);

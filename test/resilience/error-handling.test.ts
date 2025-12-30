@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { Job } from '../../src';
 
 describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
@@ -82,7 +82,7 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
     expect(processedData.metadata.nested.array.length).toBe(1000);
   });
 
-  test('应当处理载荷中的特殊字符和 Unicode (should handle special characters and unicode in payloads)', async ({ createQueue, createWorker }) => {
+  test('应当处理特殊字符和 Unicode (should handle special characters and unicode in payloads)', async ({ createQueue, createWorker }) => {
     const q = createQueue();
 
     const specialPayloads = [
@@ -117,13 +117,8 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     worker.run();
 
-    const startTime = Date.now();
-    while (
-      processed.length < specialPayloads.length &&
-      Date.now() - startTime < 5000
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    // 使用状态轮询等待所有任务处理完成
+    await waitUntil(() => processed.length >= specialPayloads.length, 5000);
 
     expect(processed.length).toBe(specialPayloads.length);
 
@@ -202,7 +197,8 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // 使用状态轮询等待任务处理完成
+    await waitUntil(() => processedJob !== null, 5000);
 
     expect(processedJob).not.toBeNull();
     expect(processedJob!.groupId).toBe(longGroupId);
@@ -283,7 +279,8 @@ describe('数据完整性与边缘情况 (Data Integrity & Edge Cases)', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // 使用状态轮询等待所有任务处理完成
+    await waitUntil(() => processed.length >= 5, 5000);
 
     expect(processed.length).toBe(5);
     expect(processed).toEqual([1, 2, 3, 4, 5]);

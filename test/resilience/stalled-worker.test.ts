@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 
 describe('任务卡顿恢复 (Stalled Job Recovery)', () => {
   test('应当支持卡顿任务检测配置 (should support stalled job detection configuration)', async ({ createQueue, createWorker }) => {
@@ -58,7 +58,8 @@ describe('任务卡顿恢复 (Stalled Job Recovery)', () => {
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // 使用状态轮询等待所有任务完成
+    await waitUntil(() => completedJobs.length >= 5, 5000);
 
     expect(completedJobs.length).toBe(5);
     expect(stalledEvents.length).toBe(0);
@@ -190,7 +191,8 @@ describe('Worker 事件循环阻塞 (Worker Event Loop Blocking)', () => {
       });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // 使用 waitForEmpty 等待队列清空
+    await queue.waitForEmpty({ timeoutMs: 5000 });
 
     const metrics = worker.getWorkerMetrics();
 
@@ -223,7 +225,8 @@ describe('Worker 事件循环阻塞 (Worker Event Loop Blocking)', () => {
       });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    // 使用 waitForEmpty 等待队列清空
+    await queue.waitForEmpty({ timeoutMs: 5000 });
 
     const metrics = worker.getWorkerMetrics();
     expect(metrics.blockingStats.totalBlockingCalls).toBeGreaterThan(0);

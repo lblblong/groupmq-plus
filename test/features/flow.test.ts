@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { PriorityStrategy } from '../../src';
 
 describe('Flow API (任务流方法)', () => {
@@ -144,9 +144,13 @@ describe('Flow API (任务流方法)', () => {
           return 'parent-done';
         },
       });
+      worker.run();
 
-      // 等待处理完成
-      await new Promise((r) => setTimeout(r, 2000));
+      // 使用状态轮询等待父任务完成
+      await waitUntil(async () => {
+        const job = await queue.getJob(parentId);
+        return job.status === 'completed';
+      }, 5000);
 
       const parentJob = await queue.getJob(parentId);
       const values = await parentJob.getChildrenValues();
@@ -433,7 +437,7 @@ describe('Flow 执行 (父子任务流)', () => {
     const queue = createQueue({ logger: false });
 
     // 添加 Flow：1个子任务必然失败
-    await queue.addFlow({
+    const parent = await queue.addFlow({
       parent: { groupId: 'p-g', data: { name: 'parent' } },
       children: [
         { groupId: 'c-g', data: { fail: true }, maxAttempts: 1 },
@@ -453,9 +457,10 @@ describe('Flow 执行 (父子任务流)', () => {
         return 'ok';
       },
     });
+    worker.run();
 
-    // 等待足够长的时间让失败发生并记录
-    await new Promise((r) => setTimeout(r, 2000));
+    // 使用 waitUntilFinished 等待父任务完成
+    await parent.waitUntilFinished(5000);
 
     // 验证：父任务是否进入了 Completed 状态
     const processedParent = completedJobs.find((id) => id.length > 10);
@@ -467,7 +472,7 @@ describe('Flow 执行 (父子任务流)', () => {
 
     const parentId = 'parent-results';
 
-    await queue.addFlow({
+    const parent = await queue.addFlow({
       parent: { jobId: parentId, groupId: 'p-g', data: { name: 'parent' } },
       children: [
         { jobId: 'child-a', groupId: 'c-g', data: { value: 10 } },
@@ -485,8 +490,10 @@ describe('Flow 执行 (父子任务流)', () => {
         return { childResults: results };
       },
     });
+    worker.run();
 
-    await new Promise((r) => setTimeout(r, 2000));
+    // 使用 waitUntilFinished 等待父任务完成
+    await parent.waitUntilFinished(5000);
 
     // 验证子任务结果被正确存储
     const flowResults = await queue.getFlowResults(parentId);
@@ -605,7 +612,9 @@ describe('Flow 执行 (父子任务流)', () => {
     } catch (err) {
       console.log(err);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // 使用状态轮询等待所有任务进入最终失败状态
+    await waitUntil(async () => finalFailedJobs.length >= 3, 5000);
 
     expect(finalFailedJobs).toContain('parent-job');
     expect(finalFailedJobs).toContain('child-job-1');

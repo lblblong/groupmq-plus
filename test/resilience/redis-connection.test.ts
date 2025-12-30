@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { createRedis } from '../helpers/redis';
 import { Queue, Worker } from '../../src';
 import { Redis } from 'ioredis';
@@ -277,7 +277,8 @@ describe('Redis 连接断开与重新连接 (Redis Disconnect/Reconnect Tests)',
 
     worker.run();
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // 使用状态轮询等待任务处理完成
+    await waitUntil(() => processed.includes('auth'), 2000);
 
     expect(processed).toContain('auth');
 
