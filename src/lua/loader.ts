@@ -193,8 +193,10 @@ export async function evalScript<T = any>(
     const sha = await loadScript(client, name);
     const res = await (client as any).evalsha(sha, numKeys, ...argv);
     return res
-  } catch (err) {
-    console.log('执行脚本失败', err)
+  } catch (err: any) {
+    if (!((err.message as string)?.includes('Connection is closed'))) {
+      console.log('执行脚本失败', err)
+    }
     throw err;
   }
 }
