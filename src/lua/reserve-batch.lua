@@ -1,4 +1,5 @@
 --- @include "includes/common/is-queue-paused"
+--- @include "includes/common/format-job-response"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/stalled-recovery/try-trigger-stalled-check"
 --- @include "includes/concurrency-control/try-pop-next-job"
@@ -61,10 +62,8 @@ for i = 1, #groups, 2 do
     end
 
     -- Add job to batch results
-    table.insert(out, result.jobId .. "|||" .. result.groupId .. "|||" .. result.payload .. "|||" ..
-                 result.attempts .. "|||" .. result.maxAttempts .. "|||" .. result.seq .. "|||" ..
-                 result.timestamp .. "|||" .. result.orderMs .. "|||" .. result.score .. "|||" ..
-                 result.deadline .. "|||" .. result.isFlowParent .. "|||" .. token)
+    result.token = token  -- Override with batch-specific token
+    table.insert(out, formatJobResponse(result))
 
     jobIndex = jobIndex + 1
   else

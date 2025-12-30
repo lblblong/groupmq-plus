@@ -1,4 +1,5 @@
 --- @include "includes/common/is-queue-paused"
+--- @include "includes/common/format-job-response"
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 
@@ -150,4 +151,17 @@ else
 end
 
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. token
+return formatJobResponse({
+  id = id,
+  groupId = groupId,
+  payload = payload,
+  attempts = attempts,
+  maxAttempts = maxAttempts,
+  seq = seq,
+  timestamp = enq,
+  orderMs = orderMs,
+  score = score,
+  deadline = deadline,
+  isFlowParent = isFlowParent,
+  token = token
+})

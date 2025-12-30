@@ -1,4 +1,5 @@
 --- @include "includes/security/verify-token"
+--- @include "includes/common/format-job-response"
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/flow/update-parent-flow"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
@@ -242,4 +243,17 @@ else
   redis.call("ZREM", limitedKey, groupId)
 end
 
-return id .. "|||" .. groupId .. "|||" .. payload .. "|||" .. attempts .. "|||" .. maxAttempts .. "|||" .. seq .. "|||" .. enq .. "|||" .. orderMs .. "|||" .. score .. "|||" .. deadline .. "|||" .. (isFlowParent or "0") .. "|||" .. nextJobToken
+return formatJobResponse({
+  id = id,
+  groupId = groupId,
+  payload = payload,
+  attempts = attempts,
+  maxAttempts = maxAttempts,
+  seq = seq,
+  timestamp = enq,
+  orderMs = orderMs,
+  score = score,
+  deadline = deadline,
+  isFlowParent = isFlowParent,
+  token = nextJobToken
+})

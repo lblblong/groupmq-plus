@@ -1,4 +1,5 @@
 --- @include "includes/common/is-queue-paused"
+--- @include "includes/common/format-job-response"
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/stalled-recovery/try-trigger-stalled-check"
 --- @include "includes/concurrency-control/try-pop-next-job"
@@ -70,10 +71,7 @@ for i = 1, #groups, 2 do
     end
 
     -- Return job data as formatted string
-    return result.jobId .. "|||" .. result.groupId .. "|||" .. result.payload .. "|||" ..
-           result.attempts .. "|||" .. result.maxAttempts .. "|||" .. result.seq .. "|||" ..
-           result.timestamp .. "|||" .. result.orderMs .. "|||" .. result.score .. "|||" ..
-           result.deadline .. "|||" .. result.isFlowParent .. "|||" .. result.token
+    return formatJobResponse(result)
   else
     -- Group doesn't have capacity or has no jobs, check if need to move to limited
     local configKey = ns .. ":config:" .. gid
