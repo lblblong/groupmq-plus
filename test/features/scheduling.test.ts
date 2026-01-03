@@ -191,7 +191,7 @@ describe('延迟任务 (Delayed Jobs)', () => {
     await queue.add({
       groupId: 'fifo-delay-group',
       data: { id: 'job2' },
-      delay: 100,
+      delay: 150,
       orderMs: 2000,
     });
 
