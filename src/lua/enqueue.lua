@@ -1,6 +1,7 @@
 --- @include "includes/job-lifecycle/store-job"
 --- @include "includes/group-state/add-job-to-group"
 --- @include "includes/group-state/update-group-config"
+--- @include "includes/job-lifecycle/check-idempotency"
 
 -- argv: ns, groupId, dataJson, maxAttempts, orderMs, delayUntil, jobId, keepCompleted, clientTimestamp, orderingDelayMs, groupConfigJson
 local ns = KEYS[1]
@@ -22,62 +23,19 @@ updateGroupConfig({
   configJson = groupConfigJson
 })
 
-local jobKey = ns .. ":job:" .. jobId
-
 -- Step 2: Handle idempotence
-local uniqueKey = ns .. ":unique:" .. jobId
-local uniqueSet = redis.call("SET", uniqueKey, jobId, "NX")
-if not uniqueSet then
-  -- Duplicate detected. Check for stale unique mapping
-  local exists = redis.call("EXISTS", jobKey)
-  if exists == 0 then
-    -- Job doesn't exist but unique key does (stale), clean up and proceed
-    redis.call("DEL", uniqueKey)
-    redis.call("SET", uniqueKey, jobId)
-  else
-    -- Job exists, check its status and location
-    local gid = redis.call("HGET", jobKey, "groupId")
-    local inProcessing = redis.call("ZSCORE", ns .. ":processing", jobId)
-    local inDelayed = redis.call("ZSCORE", ns .. ":delayed", jobId)
-    local inGroup = nil
-    if gid then
-      inGroup = redis.call("ZSCORE", ns .. ":g:" .. gid, jobId)
-    end
-    if (not inProcessing) and (not inDelayed) and (not inGroup) then
-      if keepCompleted == 0 then
-        redis.call("DEL", jobKey)
-        redis.call("DEL", uniqueKey)
-        redis.call("SET", uniqueKey, jobId)
-      else
-        -- Job hash exists and we're keeping completed jobs, ensure unique key exists
-        redis.call("SET", uniqueKey, jobId)
-        return jobId
-      end
-    else
-      if keepCompleted == 0 then
-        local jobStatus = redis.call("HGET", jobKey, "status")
-        if jobStatus == "completed" then
-          redis.call("DEL", jobKey)
-          redis.call("DEL", uniqueKey)
-          redis.call("SET", uniqueKey, jobId)
-        else
-          -- Job is still active, ensure unique key exists
-          redis.call("SET", uniqueKey, jobId)
-          return jobId
-        end
-      end
-      local activeAgain = redis.call("ZSCORE", ns .. ":processing", jobId)
-      local delayedAgain = redis.call("ZSCORE", ns .. ":delayed", jobId)
-      local inGroupAgain = nil
-      if gid then
-        inGroupAgain = redis.call("ZSCORE", ns .. ":g:" .. gid, jobId)
-      end
-      local jobStillExists = redis.call("EXISTS", jobKey)
-      if jobStillExists == 1 and (activeAgain or delayedAgain or inGroupAgain) then
-        return jobId
-      end
-    end
-  end
+local idempotencyResult = checkIdempotency({
+  ns = ns,
+  jobId = jobId,
+  keepCompleted = keepCompleted
+})
+
+if idempotencyResult == "exists" then
+  return jobId
+elseif idempotencyResult == "stale" then
+  -- Stale key was cleaned, continue with new job creation
+elseif idempotencyResult == "new" then
+  -- New job, continue with creation
 end
 
 -- Step 3: Store job data and get score/seq
