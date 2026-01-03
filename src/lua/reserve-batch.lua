@@ -3,6 +3,7 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/stalled-recovery/try-trigger-stalled-check"
 --- @include "includes/concurrency-control/try-pop-next-job"
+--- @include "includes/concurrency-control/handle-full-group"
 
 -- argv: ns, nowEpochMs, vtMs, maxBatch, tokenBase
 local ns = KEYS[1]
@@ -68,20 +69,7 @@ for i = 1, #groups, 2 do
     jobIndex = jobIndex + 1
   else
     -- Group doesn't have capacity or has no jobs, check if need to move to limited
-    local configKey = ns .. ":config:" .. gid
-    local activeCount = redis.call("LLEN", ns .. ":g:" .. gid .. ":active")
-    local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-
-    if activeCount >= limit then
-      -- Group is at capacity, move to limited if it has waiting tasks
-      local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-      if head and #head >= 2 then
-        local headScore = tonumber(head[2])
-        if redis.call("ZCARD", gZ) > 0 then
-          updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
-        end
-      end
-    end
+    handleFullGroup({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey })
   end
 end
 

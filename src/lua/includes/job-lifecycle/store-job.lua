@@ -1,3 +1,5 @@
+--- @include "includes/job-lifecycle/generate-job-seq"
+
 --[[
   存储任务 (Store Job)
 
@@ -31,13 +33,10 @@ local function storeJob(opts)
 
   local jobKey = ns .. ":job:" .. jobId
 
-  -- Generate sequence number
-  local baseEpoch = 1704067200000
-  local relativeMs = orderMs - baseEpoch
-  local daysSinceEpoch = math.floor(orderMs / 86400000)
-  local seqKey = ns .. ":seq:" .. daysSinceEpoch
-  local seq = redis.call("INCR", seqKey)
-  local score = relativeMs * 1000 + seq
+  -- Generate sequence number and score using shared module
+  local result = generateJobSeq({ ns = ns, orderMs = orderMs })
+  local score = result[1]
+  local seq = result[2]
 
   -- Get Redis server time
   local timeResult = redis.call("TIME")

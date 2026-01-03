@@ -33,7 +33,6 @@ local function recoverSingleJob(opts)
 
   -- Clean up processing state
   redis.call("LREM", ns .. ":g:" .. groupId .. ":active", 1, jobId)
-  redis.call("DEL", ns .. ":lock:" .. groupId)
   redis.call("DEL", procKey)
   redis.call("ZREM", processingKey, jobId)
 

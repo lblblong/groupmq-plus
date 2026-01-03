@@ -1,3 +1,5 @@
+--- @include "includes/security/verify-token"
+
 -- argv: ns, jobId, groupId, extendMs, token
 local ns = KEYS[1]
 local jobId = ARGV[1]
@@ -7,10 +9,12 @@ local token = ARGV[4] -- [NEW]
 
 -- BullMQ-style: only extend processing deadline, no group lock
 local procKey = ns .. ":processing:" .. jobId
--- [NEW] Token verification
-local storedToken = redis.call("HGET", procKey, "token")
 
-if storedToken and storedToken == token then
+-- [NEW] Token verification using shared module
+local tokenStatus = verifyToken({ ns = ns, jobId = jobId, token = token })
+
+if tokenStatus == 1 then
+  -- Token valid, extend deadline
   local now = tonumber(redis.call("TIME")[1]) * 1000
   local newDeadline = now + extendMs
   redis.call("HSET", procKey, "deadlineAt", tostring(newDeadline))
@@ -20,7 +24,7 @@ if storedToken and storedToken == token then
   redis.call("ZADD", processingKey, newDeadline, jobId)
   return 1
 else
-  -- Token mismatch or key missing (stalled)
+  -- Token mismatch (0) or key missing (-1), both indicate stalled
   return 0
 end
 

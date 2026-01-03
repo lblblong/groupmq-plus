@@ -80,7 +80,6 @@ local function tryTriggerStalledCheck(opts)
         end
         -- Remove from active list to prevent ghost concurrency
         redis.call("LREM", ns .. ":g:" .. gid .. ":active", 1, jobId)
-        redis.call("DEL", ns .. ":lock:" .. gid)
         redis.call("DEL", procKey)
         redis.call("ZREM", processingKey, jobId)
       end

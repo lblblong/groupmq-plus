@@ -1,4 +1,5 @@
 --- @include "includes/job-lifecycle/store-job"
+--- @include "includes/job-lifecycle/generate-job-seq"
 --- @include "includes/group-state/add-job-to-group"
 --- @include "includes/group-state/update-group-config"
 
@@ -36,12 +37,10 @@ updateGroupConfig({
 local childrenCount = (#ARGV - 7) / 7
 
 -- Step 1: Setup Parent Job using storeJob module
-local baseEpoch = 1704067200000
-local parentRelativeMs = parentOrderMs - baseEpoch
-local parentDaysSinceEpoch = math.floor(parentOrderMs / 86400000)
-local parentSeqKey = ns .. ":seq:" .. parentDaysSinceEpoch
-local parentSeq = redis.call("INCR", parentSeqKey)
-local parentScore = parentRelativeMs * 1000 + parentSeq
+-- Generate parent job seq and score
+local parentSeqResult = generateJobSeq({ ns = ns, orderMs = parentOrderMs })
+local parentScore = parentSeqResult[1]
+local parentSeq = parentSeqResult[2]
 
 -- Store parent with special "waiting-children" status
 redis.call("HMSET", parentKey,

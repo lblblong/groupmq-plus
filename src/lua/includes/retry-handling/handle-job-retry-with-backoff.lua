@@ -1,6 +1,7 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/group-state/remove-job-from-active"
+--- @include "includes/security/verify-token"
 
 -- 入参:
 --   opts.ns: 命名空间
@@ -18,19 +19,21 @@ local function handleJobRetryWithBackoff(opts)
   local token = opts.token
   local backoffMs = opts.backoffMs
   local jobKey = ns .. ":job:" .. jobId
+  local procKey = ns .. ":processing:" .. jobId
   local readyKey = ns .. ":ready"
   local limitedKey = ns .. ":limited"
 
-  -- 令牌验证
-  local procKey = ns .. ":processing:" .. jobId
-  local storedToken = redis.call("HGET", procKey, "token")
+  -- 令牌验证 using shared module
+  local tokenStatus = verifyToken({ ns = ns, jobId = jobId, token = token })
 
-  if storedToken and storedToken ~= token then
-    return -2 -- 令牌不匹配，任务已被其他worker接管
+  if tokenStatus == 0 then
+    -- Token doesn't match, task taken by another worker
+    return -2
   end
 
-  if not storedToken and token then
-    return -2 -- 不安全：任务已被清理，令牌已失效
+  if tokenStatus == -1 and token then
+    -- Key doesn't exist but token was provided, unsafe state
+    return -2
   end
 
   local attempts = tonumber(redis.call("HINCRBY", jobKey, "attempts", 1))
