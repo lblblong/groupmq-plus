@@ -1,10 +1,8 @@
 --- @include "includes/security/verify-token"
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/flow/update-parent-flow"
---- @include "includes/group-lifecycle/update-group-ready-limited-state"
---- @include "includes/group-lifecycle/cleanup-if-group-empty"
+--- @include "includes/group-lifecycle/refresh-group-state"
 --- @include "includes/job-lifecycle/record-job-finalization"
---- @include "includes/group-status/get-group-head-job"
 
 --[[
   完成任务 (Complete Job)
@@ -88,25 +86,12 @@ local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
 redis.call("HINCRBY", groupMetaKey, "count", -1)
 
 -- 检查群组中是否还有更多任务并更新状态
-local nextJobId = getGroupHeadJob({
+refreshGroupState({
   ns = ns,
-  groupId = gid
+  groupId = gid,
+  readyKey = readyKey,
+  limitedKey = limitedKey
 })
-if nextJobId then
-  -- 群组还有更多任务，更新 ready/limited 状态
-  local gZ = ns .. ":g:" .. gid
-  local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if nextHead and #nextHead >= 2 then
-    local nextScore = tonumber(nextHead[2])
-    updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey, headScore = nextScore })
-  end
-else
-  -- 没有更多任务，清理群组
-  cleanupIfGroupEmpty({
-    ns = ns,
-    groupId = gid
-  })
-end
 
 -- Part 2: 如果这是子任务，更新父任务流
 if parentId then

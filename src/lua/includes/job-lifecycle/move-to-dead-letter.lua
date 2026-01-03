@@ -1,5 +1,5 @@
 --- @include "includes/group-state/remove-job-from-active"
---- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/group-lifecycle/refresh-group-state"
 
 --[[
   将任务标记为死信 (Move to Dead Letter)
@@ -47,7 +47,7 @@ local function moveToDeadLetter(opts)
 
   -- 递减群组任务计数
   local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
-  local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+  redis.call("HINCRBY", groupMetaKey, "count", -1)
 
   -- 从processing移除
   redis.call("DEL", procKey)
@@ -63,26 +63,13 @@ local function moveToDeadLetter(opts)
     jobId = jobId
   })
 
-  -- 检查群组是否为空或需要从ready队列移除
-  if remainingJobs <= 0 then
-    -- 群组为空，移除from ready和limited队列并进行清理
-    redis.call("ZREM", readyKey, groupId)
-    redis.call("ZREM", limitedKey, groupId)
-    redis.call("DEL", gZ)
-    redis.call("DEL", groupMetaKey)
-    local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-    redis.call("DEL", groupActiveKey)
-    redis.call("SREM", ns .. ":groups", groupId)
-  else
-    -- 群组仍有任务，检查是否可以从limited移动到ready
-    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-    if head and #head >= 2 then
-      local headScore = tonumber(head[2])
-
-      -- [LIMITED GROUP SET] 检查是否可以从limited移动到ready
-      updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
-    end
-  end
+  -- 使用统一的群组状态刷新模块处理群组清理和 ready/limited 队列更新
+  refreshGroupState({
+    ns = ns,
+    groupId = groupId,
+    readyKey = readyKey,
+    limitedKey = limitedKey
+  })
 
   return 1
 end

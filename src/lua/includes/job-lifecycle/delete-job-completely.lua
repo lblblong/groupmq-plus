@@ -1,5 +1,5 @@
 --- @include "includes/flow/remove-child-from-parent"
---- @include "includes/group-lifecycle/cleanup-if-group-empty"
+--- @include "includes/group-lifecycle/refresh-group-state"
 
 --[[
   删除任务及其所有关联数据 (Delete Job Completely)
@@ -59,10 +59,12 @@ local function deleteJobCompletely(opts)
       redis.call("HINCRBY", groupMetaKey, "count", -1)
     end
 
-    -- 使用cleanup helper处理群组清理和ready/limited队列更新
-    cleanupIfGroupEmpty({
+    -- 使用统一的群组状态刷新模块处理群组清理和 ready/limited 队列更新
+    refreshGroupState({
       ns = ns,
-      groupId = groupId
+      groupId = groupId,
+      readyKey = ns .. ":ready",
+      limitedKey = ns .. ":limited"
     })
   end
 

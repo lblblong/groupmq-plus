@@ -1,5 +1,5 @@
---- @include "includes/group-lifecycle/cleanup-if-group-empty"
---- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/dal/get-job-state"
+--- @include "includes/group-lifecycle/refresh-group-state"
 --- @include "includes/delayed-handling/promote-delayed-job-complete"
 
 -- argv: ns, jobId, newDelayUntil, now
@@ -31,14 +31,16 @@ end
 
 local gZ = ns .. ":g:" .. groupId
 
--- Check if job is currently in delayed set
-local inDelayed = redis.call("ZSCORE", delayedKey, jobId)
--- Check if job is currently in group ZSET
-local inGroup = redis.call("ZSCORE", gZ, jobId)
+-- 使用 get-job-state 模块检查任务状态
+local jobState = getJobState({
+  ns = ns,
+  jobId = jobId,
+  groupId = groupId
+})
 
--- If it's not in either, it might be processing or completed/failed
--- We only allow changing delay for waiting or delayed jobs
-if not inDelayed and not inGroup then
+-- 只允许修改 'waiting' 或 'delayed' 状态的任务延迟时间
+-- 不允许修改 'active', 'completed', 'failed' 状态的任务
+if jobState ~= 'waiting' and jobState ~= 'delayed' then
   return 0
 end
 
@@ -52,10 +54,12 @@ if newDelayUntil > 0 and newDelayUntil > now then
   redis.call("ZADD", delayedKey, newDelayUntil, jobId)
   redis.call("ZREM", gZ, jobId)
 
-  -- Use centralized cleanup module to handle group state
-  cleanupIfGroupEmpty({
+  -- Use centralized refresh module to handle group state
+  refreshGroupState({
     ns = ns,
-    groupId = groupId
+    groupId = groupId,
+    readyKey = readyKey,
+    limitedKey = limitedKey
   })
 else
   -- Job should be ready immediately: promote using standard function

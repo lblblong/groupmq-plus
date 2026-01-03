@@ -1,6 +1,20 @@
--- check-idempotency.lua
--- Checks if a job can be enqueued by verifying idempotency
--- Returns: "new" (can enqueue), "exists" (already exists), or "stale" (stale key, cleaned)
+--- @include "includes/dal/get-job-state"
+
+--[[
+  幂等性检查 (Check Idempotency)
+  
+  检查任务是否可以入队，通过验证幂等性和任务状态。
+  
+  Parameters:
+    opts.ns: Redis 命名空间前缀
+    opts.jobId: 任务 ID
+    opts.keepCompleted: 是否保留已完成的任务记录 (默认 0)
+  
+  Returns: 
+    "new" - 任务是新的，可以入队
+    "exists" - 任务已存在，无法重复入队
+    "stale" - 任务已过期，unique key 被清理，可重新入队
+]]
 
 local function checkIdempotency(opts)
   local ns = opts.ns
@@ -10,66 +24,38 @@ local function checkIdempotency(opts)
   local jobKey = ns .. ":job:" .. jobId
   local uniqueKey = ns .. ":unique:" .. jobId
 
-  -- Try to acquire the unique lock for this job
+  -- 尝试获取 unique 锁
   local uniqueSet = redis.call("SET", uniqueKey, jobId, "NX")
   if not uniqueSet then
-    -- Duplicate detected. Check for stale unique mapping
-    local exists = redis.call("EXISTS", jobKey)
-    if exists == 0 then
-      -- Job doesn't exist but unique key does (stale), clean up and proceed
+    -- 检测到重复。使用新的 get-job-state 模块获取任务状态
+    local jobState = getJobState({
+      ns = ns,
+      jobId = jobId
+    })
+
+    if jobState == 'unknown' then
+      -- 任务不存在但 unique key 存在（过期的映射），清理并允许重新入队
       redis.call("DEL", uniqueKey)
       redis.call("SET", uniqueKey, jobId)
       return "stale"
-    else
-      -- Job exists, check its status and location
-      local gid = redis.call("HGET", jobKey, "groupId")
-      local inProcessing = redis.call("ZSCORE", ns .. ":processing", jobId)
-      local inDelayed = redis.call("ZSCORE", ns .. ":delayed", jobId)
-      local inGroup = nil
-      if gid then
-        inGroup = redis.call("ZSCORE", ns .. ":g:" .. gid, jobId)
-      end
-
-      if (not inProcessing) and (not inDelayed) and (not inGroup) then
-        -- Job is not in any queue (completed or deleted)
-        if keepCompleted == 0 then
-          redis.call("DEL", jobKey)
-          redis.call("DEL", uniqueKey)
-          redis.call("SET", uniqueKey, jobId)
-          return "stale"
-        else
-          -- Job hash exists and we're keeping completed jobs
-          redis.call("SET", uniqueKey, jobId)
-          return "exists"
-        end
+    elseif jobState == 'completed' or jobState == 'failed' then
+      -- 任务已完成或失败
+      if keepCompleted == 0 then
+        -- 不保留已完成的任务，清理并允许重新入队
+        redis.call("DEL", jobKey)
+        redis.call("DEL", uniqueKey)
+        redis.call("SET", uniqueKey, jobId)
+        return "stale"
       else
-        -- Job is in a queue, need to check its status
-        if keepCompleted == 0 then
-          local jobStatus = redis.call("HGET", jobKey, "status")
-          if jobStatus == "completed" then
-            redis.call("DEL", jobKey)
-            redis.call("DEL", uniqueKey)
-            redis.call("SET", uniqueKey, jobId)
-            return "stale"
-          else
-            -- Job is still active, return exists
-            redis.call("SET", uniqueKey, jobId)
-            return "exists"
-          end
-        end
-
-        -- Double-check if job still exists and is active
-        local activeAgain = redis.call("ZSCORE", ns .. ":processing", jobId)
-        local delayedAgain = redis.call("ZSCORE", ns .. ":delayed", jobId)
-        local inGroupAgain = nil
-        if gid then
-          inGroupAgain = redis.call("ZSCORE", ns .. ":g:" .. gid, jobId)
-        end
-        local jobStillExists = redis.call("EXISTS", jobKey)
-        if jobStillExists == 1 and (activeAgain or delayedAgain or inGroupAgain) then
-          return "exists"
-        end
+        -- 保留已完成的任务，不允许重新入队
+        redis.call("SET", uniqueKey, jobId)
+        return "exists"
       end
+    else
+      -- 任务仍在活跃状态 (active, delayed, waiting)
+      -- 不允许重新入队
+      redis.call("SET", uniqueKey, jobId)
+      return "exists"
     end
   end
 

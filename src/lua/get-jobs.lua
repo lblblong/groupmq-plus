@@ -4,12 +4,13 @@
 --[[
   获取任务列表 (Get Jobs)
   
-  合并了原有的 get-active-jobs, get-waiting-jobs, get-delayed-jobs 脚本
+  根据任务类型获取任务列表，支持分页和性能保护。
   
   KEYS[1]: ns - 命名空间
   ARGV[1]: type - 任务类型 ('active'|'waiting'|'delayed')
   ARGV[2]: start - 可选，起始索引 (默认 0)
   ARGV[3]: stop - 可选，结束索引 (默认 -1，表示全部)
+  ARGV[4]: limit - 可选，当 type='waiting' 时的最大返回任务数 (默认 1000)
   
   返回值:
     - 任务 ID 列表 (array)
@@ -19,6 +20,7 @@ local ns = KEYS[1]
 local jobType = ARGV[1]
 local start = tonumber(ARGV[2]) or 0
 local stop = tonumber(ARGV[3]) or -1
+local limit = tonumber(ARGV[4]) or 1000
 
 if not jobType then
   error("Missing required parameter: type ('active'|'waiting'|'delayed')")
@@ -35,11 +37,11 @@ if jobType == 'active' then
   })
   
 elseif jobType == 'waiting' then
-  -- 从所有群组获取 (iterate-groups 目前不支持分页，返回全部)
-  -- TODO: 如需分页支持，需扩展 iterate-groups
+  -- 从所有群组获取，使用 limit 参数进行性能保护
   return iterateGroups({
     ns = ns,
-    operation = 'list'
+    operation = 'list',
+    limit = limit
   })
   
 elseif jobType == 'delayed' then

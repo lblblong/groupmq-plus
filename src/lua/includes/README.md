@@ -2,6 +2,134 @@
 
 本目录包含所有可复用的 Lua 函数模块。
 
+## 如何编写一个函数
+
+### 基本结构
+
+每个函数文件应遵循以下模板结构：
+
+```lua
+--[[
+  函数的简短描述和说明
+  
+  Parameters:
+    opts.paramName: 参数说明
+    opts.anotherParam: 参数说明
+    
+  Returns: 返回值说明
+]]
+--- @include "includes/category/dependency-function"
+--- @include "includes/another-category/another-dependency"
+
+local function functionName(opts)
+  local ns = opts.ns
+  local param1 = opts.paramName
+  
+  -- 函数实现逻辑
+  local result = redis.call("COMMAND", ns .. ":key", param1)
+  
+  return result
+end
+```
+
+### 编写规范
+
+#### 1. **文件命名**
+- 使用小写 kebab-case 格式：`my-function.lua`
+- 文件名应清晰反映函数功能
+
+#### 2. **注释要求**
+- 在函数顶部使用 Lua 块注释 `--[[ ]]` 说明函数功能
+- 列出所有参数及其说明，格式：`opts.paramName: 说明`
+- 说明返回值的含义和类型
+- 使用 `--- @include` 标注该函数依赖的其他 include 函数
+
+#### 3. **参数约定**
+- 所有参数通过单个 `opts` 表传入
+- 必须包含 `opts.ns`（Redis 命名空间前缀）
+- 参数名使用有意义的驼峰或下划线命名
+
+#### 4. **Redis 操作**
+- 使用 `redis.call()` 执行 Redis 命令
+- 所有 key 应使用 `ns .. ":keyname"` 格式拼接命名空间
+- 合理使用 Redis 数据结构（String, List, Set, ZSet, Hash 等）
+
+#### 5. **返回值**
+- 返回有意义的值（数字、字符串、table 或布尔值）
+- 避免返回 nil，如无特定返回值则返回成功标志（如 1 或 0）
+
+### 实际例子
+
+#### 例子 1：简单的数据检查函数
+```lua
+--[[
+  检查队列是否为空
+  
+  Parameters:
+    opts.ns: Redis 命名空间前缀
+    opts.ignoreDelayed: "1" 忽略延迟任务, "0" 检查延迟任务
+    
+  Returns: 1 if 队列为空, 0 if 队列非空
+]]
+
+local function checkQueueEmpty(opts)
+  local ns = opts.ns
+  local ignoreDelayed = opts.ignoreDelayed
+  
+  local processingCount = redis.call("ZCARD", ns .. ":processing")
+  if processingCount > 0 then
+    return 0
+  end
+  
+  if ignoreDelayed ~= "1" then
+    local delayedCount = redis.call("ZCARD", ns .. ":delayed")
+    if delayedCount > 0 then
+      return 0
+    end
+  end
+  
+  return 1
+end
+```
+
+#### 例子 2：依赖其他函数的组合函数
+```lua
+--[[
+  检查群组是否达到并发容量限制
+  
+  Parameters:
+    opts.ns: Redis 命名空间前缀
+    opts.groupId: 群组 ID
+    
+  Returns: true if 群组已满, false 否则
+]]
+--- @include "includes/concurrency-control/get-group-concurrency-limit"
+--- @include "includes/concurrency-control/get-group-active-count"
+
+local function isGroupAtCapacity(opts)
+  local ns = opts.ns
+  local groupId = opts.groupId
+  
+  local limit = getGroupConcurrencyLimit({ ns = ns, groupId = groupId })
+  local activeCount = getGroupActiveCount({ ns = ns, groupId = groupId })
+  
+  return activeCount >= limit
+end
+```
+
+### 文件组织
+
+- 将相关功能的函数放在同一目录下
+- 按功能分类：`common/`, `concurrency-control/`, `job-lifecycle/` 等
+- 每个目录可以有 include 的函数
+- 提供清晰的命名，使用者可快速找到所需函数
+
+### 调试提示
+
+- 使用 `redis.log()` 输出调试信息到 Redis 日志
+- 在复杂逻辑前添加注释，说明各步骤的目的
+- 确保所有参数都有默认处理或明确的错误处理
+
 ## 文件结构概览
 
 - **common/** - 通用工具函数

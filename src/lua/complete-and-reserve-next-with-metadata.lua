@@ -2,8 +2,8 @@
 --- @include "includes/common/format-job-response"
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/flow/update-parent-flow"
---- @include "includes/group-lifecycle/update-group-ready-limited-state"
---- @include "includes/dal/fetch-job-data"
+--- @include "includes/group-lifecycle/refresh-group-state"
+--- @include "includes/concurrency-control/try-pop-next-job"
 
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
@@ -146,22 +146,29 @@ local eventPayload = cjson.encode({
 })
 redis.call("PUBLISH", ns .. ":events", eventPayload)
 
--- Part 4: Handle group active list and get next job (BullMQ-style)
+-- Part 4: Handle group active list and reserve next job using unified module
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
 local activeJobId = redis.call("LINDEX", groupActiveKey, 0)
 
 -- Decrement group job count
 local groupMetaKey = ns .. ":g:" .. gid .. ":meta"
-local remainingJobs = tonumber(redis.call("HINCRBY", groupMetaKey, "count", -1))
+redis.call("HINCRBY", groupMetaKey, "count", -1)
 
 -- Check if completed job is at the head of active list
 if activeJobId ~= completedJobId then
-  -- Race condition: job is not at head (maybe already removed, or wrong job)
+  -- Race condition: job is not at head
   -- Clean it up anyway to prevent stale entries, but don't try to reserve next
   removeJobFromActive({
     ns = ns,
     groupId = gid,
     jobId = completedJobId
+  })
+  -- 更新群组状态（可能为空或需要从 ready/limited 重新评估）
+  refreshGroupState({
+    ns = ns,
+    groupId = gid,
+    readyKey = readyKey,
+    limitedKey = limitedKey
   })
   -- Return nil to indicate no chaining
   return nil
@@ -174,97 +181,59 @@ removeJobFromActive({
   jobId = completedJobId
 })
 
-local gZ = ns .. ":g:" .. gid
-local zpop = redis.call("ZPOPMIN", gZ, 1)
-if not zpop or #zpop == 0 then
-  -- Clean up empty group ONLY if no jobs left in any state
-  if remainingJobs <= 0 then
-    redis.call("DEL", gZ)
-    redis.call("DEL", groupMetaKey)
-    redis.call("SREM", ns .. ":groups", gid)
-    redis.call("ZREM", readyKey, gid)
-    redis.call("ZREM", limitedKey, gid)
-  else
-    -- Group still has delayed/staged jobs, just remove from ready/limited
-    redis.call("ZREM", readyKey, gid)
-    redis.call("ZREM", limitedKey, gid)
-  end
-  -- No next job
-  return nil
-end
+-- 使用统一的出队模块尝试预留下一个任务
+-- allowedJobId = gid 确保刚完成的任务出队后，有空位让下一个任务进来（1 换 1）
+local nextJob = tryPopNextJob({
+  ns = ns,
+  groupId = gid,
+  vt = vt,
+  token = nextJobToken,
+  now = now,
+  processingKey = processingKey,
+  allowedJobId = completedJobId  -- 豁免权：刚完成的任务
+})
 
-local nextJobId = zpop[1]
-local nextJobKey = ns .. ":job:" .. nextJobId
-
--- Read and validate next job data
-local job = fetchJobData({ ns = ns, jobId = nextJobId })
-if not job then
-  -- Job hash is missing/corrupted, clean up and return completion only
-  -- Re-add next job to ready queue if exists
-  local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if nextHead and #nextHead >= 2 then
-    local nextScore = tonumber(nextHead[2])
-    redis.call("ZADD", readyKey, nextScore, gid)
-  end
-
+-- 如果没有下一个任务，清理群组并更新状态
+if not nextJob then
+  refreshGroupState({
+    ns = ns,
+    groupId = gid,
+    readyKey = readyKey,
+    limitedKey = limitedKey
+  })
   -- Return nil to indicate no next job was reserved
   return nil
 end
 
-local id = job.id
-local groupId = job.groupId
-local payload = job.payload
-local attempts = job.attempts
-local maxAttempts = job.maxAttempts
-local seq = job.seq
-local enq = job.timestamp
-local orderMs = job.orderMs
-local score = job.score
-local isFlowParent = job.isFlowParent
-
--- Push next job to active list (chaining)
-redis.call("LPUSH", groupActiveKey, id)
-
-local procKey = ns .. ":processing:" .. id
-local deadline = now + vt
-redis.call("HSET", procKey, 
-  "groupId", groupId, 
-  "deadlineAt", tostring(deadline),
-  "token", nextJobToken)
-
-local processingKey = ns .. ":processing"
-redis.call("ZADD", processingKey, deadline, id)
-
--- Mark next job as processing for accurate stalled detection
-redis.call("HSET", nextJobKey, "status", "processing")
-
--- [LIMITED GROUP SET] Update ready/limited status
-local configKey = ns .. ":config:" .. gid
-local limit = tonumber(redis.call("HGET", configKey, "concurrency")) or 1
-local currentActive = redis.call("LLEN", groupActiveKey)
-
--- Get the score of the NEW head of gZ
+-- 群组中还有任务，更新 ready/limited 状态
+local gZ = ns .. ":g:" .. gid
 local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
 if nextHead and #nextHead >= 2 then
   local nextHeadScore = tonumber(nextHead[2])
-  updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = nextHeadScore })
-else
-  -- No more jobs in gZ
-  redis.call("ZREM", readyKey, groupId)
-  redis.call("ZREM", limitedKey, groupId)
+  local readyKeyVal = readyKey
+  local limitedKeyVal = limitedKey
+  
+  -- 使用 refreshGroupState 来保持状态一致
+  -- 注意：此时 gZ 中仍有任务，cleanupIfGroupEmpty 会返回 "not-empty"
+  refreshGroupState({
+    ns = ns,
+    groupId = gid,
+    readyKey = readyKeyVal,
+    limitedKey = limitedKeyVal
+  })
 end
 
 return formatJobResponse({
-  id = id,
-  groupId = groupId,
-  payload = payload,
-  attempts = attempts,
-  maxAttempts = maxAttempts,
-  seq = seq,
-  timestamp = enq,
-  orderMs = orderMs,
-  score = score,
-  deadline = deadline,
-  isFlowParent = isFlowParent,
+  id = nextJob.jobId,
+  groupId = nextJob.groupId,
+  payload = nextJob.payload,
+  attempts = nextJob.attempts,
+  maxAttempts = nextJob.maxAttempts,
+  seq = nextJob.seq,
+  timestamp = nextJob.timestamp,
+  orderMs = nextJob.orderMs,
+  score = nextJob.score,
+  deadline = nextJob.deadline,
+  isFlowParent = nextJob.isFlowParent,
   token = nextJobToken
 })
