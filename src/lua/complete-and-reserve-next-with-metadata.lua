@@ -206,22 +206,13 @@ if not nextJob then
 end
 
 -- 群组中还有任务，更新 ready/limited 状态
-local gZ = ns .. ":g:" .. gid
-local nextHead = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-if nextHead and #nextHead >= 2 then
-  local nextHeadScore = tonumber(nextHead[2])
-  local readyKeyVal = readyKey
-  local limitedKeyVal = limitedKey
-  
-  -- 使用 refreshGroupState 来保持状态一致
-  -- 注意：此时 gZ 中仍有任务，cleanupIfGroupEmpty 会返回 "not-empty"
-  refreshGroupState({
-    ns = ns,
-    groupId = gid,
-    readyKey = readyKeyVal,
-    limitedKey = limitedKeyVal
-  })
-end
+-- Module will handle both empty and non-empty group cases
+refreshGroupState({
+  ns = ns,
+  groupId = gid,
+  readyKey = readyKey,
+  limitedKey = limitedKey
+})
 
 return formatJobResponse({
   id = nextJob.jobId,

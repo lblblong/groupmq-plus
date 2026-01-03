@@ -97,13 +97,9 @@ local function recoverStalledJobsCompletely(opts)
               redis.call("ZADD", groupKey, score, jobId)
               redis.call("HSET", jobKey, "status", "waiting")
 
-              local head = redis.call("ZRANGE", groupKey, 0, 0, "WITHSCORES")
-              if head and #head >= 2 then
-                local headScore = tonumber(head[2])
-
-                -- 检查群组容量，决定是否进入ready或limited
-                updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
-              end
+              -- 检查群组容量，决定是否进入ready或limited
+              -- Module will internally fetch headScore if needed
+              updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
               redis.call("SADD", groupsKey, groupId)
               table.insert(results, jobId)
               table.insert(results, groupId)

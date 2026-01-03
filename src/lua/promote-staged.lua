@@ -40,11 +40,8 @@ for i = 1, #readyJobs do
     redis.call("HSET", jobKey, "status", "waiting")
 
     -- Update group ready/limited state using centralized module
-    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-    if head and #head >= 2 then
-      local headScore = tonumber(head[2])
-      updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
-    end
+    -- Module will internally fetch headScore if needed
+    updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
 
     promotedCount = promotedCount + 1
   end

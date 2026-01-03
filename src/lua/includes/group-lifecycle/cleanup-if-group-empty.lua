@@ -16,7 +16,6 @@ local function cleanupIfGroupEmpty(opts)
   local gZ = ns .. ":g:" .. groupId
   local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
   local groupMetaKey = ns .. ":g:" .. groupId .. ":meta"
-  local groupBufferKey = ns .. ":buffer:" .. groupId
 
   -- Get the remaining job count from metadata
   local remainingJobs = tonumber(redis.call("HGET", groupMetaKey, "count")) or 0
@@ -30,7 +29,6 @@ local function cleanupIfGroupEmpty(opts)
     redis.call("DEL", gZ)
     redis.call("DEL", groupActiveKey)
     redis.call("DEL", groupMetaKey)
-    redis.call("DEL", groupBufferKey)
 
     -- Remove from group sets and queues
     redis.call("SREM", ns .. ":groups", groupId)

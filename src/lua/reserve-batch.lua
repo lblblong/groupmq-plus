@@ -3,7 +3,6 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/stalled-recovery/try-trigger-stalled-check"
 --- @include "includes/concurrency-control/try-pop-next-job"
---- @include "includes/concurrency-control/handle-full-group"
 
 -- argv: ns, nowEpochMs, vtMs, maxBatch, tokenBase
 local ns = KEYS[1]
@@ -68,8 +67,8 @@ for i = 1, #groups, 2 do
 
     jobIndex = jobIndex + 1
   else
-    -- Group doesn't have capacity or has no jobs, check if need to move to limited
-    handleFullGroup({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey })
+    -- Group doesn't have capacity or has no jobs, update its state
+    updateGroupReadyLimitedState({ ns = ns, groupId = gid, readyKey = readyKey, limitedKey = limitedKey })
   end
 end
 
