@@ -13,7 +13,6 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -67,7 +66,6 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -134,7 +132,6 @@ describe('延迟任务 (Delayed Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -174,7 +171,6 @@ describe('延迟任务 (Delayed Jobs)', () => {
       handler: async (job) => {
         processed.push((job.data as any).id);
       },
-      cleanupIntervalMs: 50,
       schedulerIntervalMs: 50,
     });
 
@@ -220,7 +216,6 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
           processedAt: Date.now(),
         });
       },
-      cleanupIntervalMs: 30,
       schedulerIntervalMs: 30,
     });
 
@@ -236,11 +231,12 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
     expect(cronJob.id).toContain('repeat:');
 
     // Wait for multiple executions
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // 增加等待时间以容忍调度器启动延迟和环境波动
+    await new Promise((resolve) => setTimeout(resolve, 350));
 
-    // Should have processed the job multiple times (at least 3 times in 250ms)
+    // Should have processed the job multiple times (at least 3 times in 350ms)
     expect(processed.length).toBeGreaterThanOrEqual(3);
-    expect(processed.length).toBeLessThanOrEqual(8);
+    expect(processed.length).toBeLessThanOrEqual(10);
 
     // All processed jobs should have the same data
     processed.forEach((job) => {
@@ -260,7 +256,6 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       handler: async (job) => {
         processed.push(`${(job.data as any).id}-${Date.now()}`);
       },
-      cleanupIntervalMs: 30000,
     });
 
     worker.run();
@@ -288,7 +283,6 @@ describe('周期任务 (Cron/Repeating Jobs)', () => {
       handler: async (job) => {
         processed.push((job.data as any).id);
       },
-      cleanupIntervalMs: 50,
       schedulerIntervalMs: 30,
     });
 

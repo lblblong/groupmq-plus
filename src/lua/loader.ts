@@ -181,13 +181,31 @@ export async function evalScript<T = any>(
   argv: Array<string>,
   numKeys: number,
 ): Promise<T> {
-  try {
+  const execute = async (): Promise<T> => {
     const sha = await loadScript(client, name);
-    const res = await (client as any).evalsha(sha, numKeys, ...argv);
-    return res
+    return await (client as any).evalsha(sha, numKeys, ...argv);
+  };
+
+  try {
+    try {
+      // First attempt
+      return await execute();
+    } catch (err: any) {
+      // Handle NOSCRIPT: clear cache and retry once
+      if (err.message?.includes('NOSCRIPT')) {
+        const map = cacheByClient.get(client);
+        if (map) map.delete(name);
+        return await execute();
+      }
+      throw err;
+    }
   } catch (err: any) {
-    if (!((err.message as string)?.includes('Connection is closed'))) {
-      console.log(`执行脚本失败（${name}）`, err)
+    // Unified error handling: inject script name for debugging
+    if (err instanceof Error) {
+      // Avoid duplicate prefix
+      if (!err.message.includes(`[LuaScript: ${name}]`)) {
+        err.message = `[LuaScript: ${name}] ${err.message}`;
+      }
     }
     throw err;
   }

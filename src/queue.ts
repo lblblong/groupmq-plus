@@ -1758,8 +1758,11 @@ export class Queue<T = any> {
 
     const message = `${err.message || ''}`
 
+    // Use .includes() to handle error messages with prefixes (e.g., [LuaScript: xxx])
     return (
-      message === 'Connection is closed.' || message.includes('ECONNREFUSED')
+      message.includes('Connection is closed') ||
+      message.includes('ECONNREFUSED') ||
+      message.includes('ETIMEDOUT')
     )
   }
 

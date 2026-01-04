@@ -18,7 +18,6 @@ describe('重试行为测试 (Retry Behavior Tests)', () => {
       queue: q,
       blockingTimeoutSec: 0.1,
       schedulerIntervalMs: 50,
-      cleanupIntervalMs: 100,
       backoff: () => 10,
       maxAttempts: 2,
       handler: async (_job) => {

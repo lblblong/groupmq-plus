@@ -35,7 +35,7 @@
     "build": "tsdown",
     "prebuild": "pnpm test:lua",
     "test": "vitest run --no-file-parallelism",
-    "test:lua": "node scripts/validate-lua-scripts.js",
+    "test:lua": "vitest run test/core/lua-scripts.test.ts",
     "test:many": "for i in {1..200}; do pnpm run test; done",
     "dev:test": "vitest --watch",
     "monitor": "jiti cli.ts",

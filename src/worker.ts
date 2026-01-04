@@ -799,7 +799,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
             await this.delay(delayMs)
           }
         } else {
-          // Non-connection error (programming error, Lua script error, etc.)
+          // Non-connection error (programming error, Lua script error, OOM, BUSY, etc.)
           // Log it, emit it, but don't retry - just continue with next iteration
           this.logger.error(
             `Worker loop error (non-connection, continuing):`,
@@ -813,8 +813,9 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
           // Reset connection retries since this wasn't a connection issue
           connectionRetries = 0
 
-          // Small delay to avoid tight error loops
-          await this.delay(100)
+          // Delay to avoid tight error loops and prevent overwhelming Redis
+          // Use 200ms for Redis internal errors (OOM, BUSY) to give Redis time to recover
+          await this.delay(200)
         }
 
         this.onError?.(err)
