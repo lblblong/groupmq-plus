@@ -175,14 +175,13 @@ if activeJobId ~= completedJobId then
 end
 
 -- Normal case: this job is at the head of active list
-removeJobFromActive({
-  ns = ns,
-  groupId = gid,
-  jobId = completedJobId
-})
+-- [FIXED]: Do NOT remove job from active list yet. 
+-- We need it to be present for tryPopNextJob's allowedJobId check to work.
+-- If we remove it first, tryPopNextJob won't find it in the list and will deny the exemption 
+-- if the group is at/over capacity.
 
 -- 使用统一的出队模块尝试预留下一个任务
--- allowedJobId = gid 确保刚完成的任务出队后，有空位让下一个任务进来（1 换 1）
+-- allowedJobId = completedJobId 确保刚完成的任务还在列表中时，有豁免权让下一个任务进来（1 换 1）
 local nextJob = tryPopNextJob({
   ns = ns,
   groupId = gid,
@@ -191,6 +190,15 @@ local nextJob = tryPopNextJob({
   now = now,
   processingKey = processingKey,
   allowedJobId = completedJobId  -- 豁免权：刚完成的任务
+})
+
+-- [FIXED]: Now remove the old job from active list.
+-- Since tryPopNextJob adds new job to head (LPUSH), our old job is likely at index 1.
+-- removeJobFromActive handles this safely (falls back to LREM if not at head).
+removeJobFromActive({
+  ns = ns,
+  groupId = gid,
+  jobId = completedJobId
 })
 
 -- 如果没有下一个任务，清理群组并更新状态
