@@ -1844,41 +1844,22 @@ export class Queue<T = any> {
         )
         // Reset consecutive empty reserves counter
         this._consecutiveEmptyReserves = 0
+        return job
       } else {
-        this.logger.warn(
+        // CRITICAL FIX: Trust Lua script's state transition.
+        // If status is 'limit_exceeded', Lua has already moved group to ':limited'.
+        // If status is 'empty', Lua implies group is empty or handled.
+        // Do NOT manually ZADD back to ready queue, as this causes infinite loops.
+        this.logger.debug(
           `Blocking found group but reserve failed: group=${groupId}, status=${reserveResult.status} (reserve took ${reserveDuration}ms)`
         )
 
-        // Check if group actually has jobs before restoring to prevent infinite loops
-        // This prevents poisoned groups (empty groups in ready queue) from being restored
-        try {
-          const groupKey = `${this.ns}:g:${groupId}`
-          const jobCount = await this.r.zcard(groupKey)
+        // Increase empty counter to trigger adaptive backoff if needed
+        this._consecutiveEmptyReserves++
 
-          if (jobCount > 0) {
-            // Group has jobs, restore it to ready queue
-            await this.r.zadd(readyKey, Number(score), groupId)
-            this.logger.debug(
-              `Restored group ${groupId} to ready with score ${score} after failed atomic reserve (${jobCount} jobs)`
-            )
-          } else {
-            // Group is empty (poisoned), don't restore it
-            this.logger.warn(
-              `Not restoring empty group ${groupId} - preventing poisoned group loop`
-            )
-          }
-        } catch (_e) {
-          // If check fails, err on the side of not restoring to prevent infinite loops
-          this.logger.warn(
-            `Failed to check group ${groupId} job count, not restoring`
-          )
-        }
-
-        // Increment consecutive empty reserves and fall back to general reserve scan
-        this._consecutiveEmptyReserves = this._consecutiveEmptyReserves + 1
+        // Fallback to non-blocking reserve to scan other potentially ready groups
         return this.reserve()
       }
-      return reserveResult.status === 'success' ? reserveResult.job : null
     } catch (err) {
       const errorDuration = Date.now() - startTime
       this.logger.error(`Blocking error after ${errorDuration}ms:`, err)
