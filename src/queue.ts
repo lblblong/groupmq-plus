@@ -1845,19 +1845,21 @@ export class Queue<T = any> {
         // Reset consecutive empty reserves counter
         this._consecutiveEmptyReserves = 0
         return job
-      } else {
-        // CRITICAL FIX: Trust Lua script's state transition.
-        // If status is 'limit_exceeded', Lua has already moved group to ':limited'.
-        // If status is 'empty', Lua implies group is empty or handled.
-        // Do NOT manually ZADD back to ready queue, as this causes infinite loops.
+      } else if (reserveResult.status === 'limit_exceeded') {
+        // PERFORMANCE FIX: Trust Lua script's state transition.
+        // E_LIMIT means Lua has already moved group to ':limited' set.
+        // Return null to let Worker re-enter bzpopmin loop, avoiding expensive O(N) scan.
         this.logger.debug(
-          `Blocking found group but reserve failed: group=${groupId}, status=${reserveResult.status} (reserve took ${reserveDuration}ms)`
+          `Blocking found group at capacity: group=${groupId} (reserve took ${reserveDuration}ms)`
         )
-
-        // Increase empty counter to trigger adaptive backoff if needed
         this._consecutiveEmptyReserves++
-
-        // Fallback to non-blocking reserve to scan other potentially ready groups
+        return null
+      } else {
+        // 'empty' status: group has no jobs, try scanning other groups
+        this.logger.debug(
+          `Blocking found empty group: group=${groupId} (reserve took ${reserveDuration}ms)`
+        )
+        this._consecutiveEmptyReserves++
         return this.reserve()
       }
     } catch (err) {
