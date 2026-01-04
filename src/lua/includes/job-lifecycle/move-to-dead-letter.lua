@@ -1,5 +1,6 @@
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/group-lifecycle/refresh-group-state"
+--- @include "includes/lock/release-lock"
 
 --[[
   将任务标记为死信 (Move to Dead Letter)
@@ -52,6 +53,9 @@ local function moveToDeadLetter(opts)
   -- 从processing移除
   redis.call("DEL", procKey)
   redis.call("ZREM", ns .. ":processing", jobId)
+
+  -- [BullMQ 风格] 释放独立锁
+  releaseLock({ ns = ns, jobId = jobId, token = token })
 
   -- 移除幂等性映射
   redis.call("DEL", ns .. ":unique:" .. jobId)

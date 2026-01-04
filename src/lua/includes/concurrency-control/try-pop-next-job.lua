@@ -25,6 +25,7 @@
 
 --- @include "includes/ghost-cleanup/detect-ghost-tasks"
 --- @include "includes/dal/fetch-job-data"
+--- @include "includes/lock/acquire-lock"
 
 local function tryPopNextJob(options)
   -- 参数解构
@@ -136,6 +137,15 @@ local function tryPopNextJob(options)
     "deadlineAt", tostring(deadline),
     "token", token)
   redis.call("ZADD", processingKey, deadline, id)
+
+  -- [BullMQ 风格] 创建独立的锁 Key，带 TTL 自动过期
+  -- 这是实现秒级故障恢复的关键：锁过期后自动消失，无需主动扫描
+  acquireLock({
+    ns = ns,
+    jobId = id,
+    token = token,
+    ttlMs = vt
+  })
 
   -- [返回任务数据]
   -- 返回 table，调用方负责格式化为字符串

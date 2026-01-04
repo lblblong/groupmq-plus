@@ -4,6 +4,7 @@
 --- @include "includes/flow/update-parent-flow"
 --- @include "includes/group-lifecycle/refresh-group-state"
 --- @include "includes/concurrency-control/try-pop-next-job"
+--- @include "includes/lock/release-lock"
 
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
@@ -55,6 +56,9 @@ redis.call("HSET", jobKey, "status", "completing") -- Temporary status to block 
 local procKey = ns .. ":processing:" .. completedJobId
 redis.call("DEL", procKey)
 redis.call("ZREM", processingKey, completedJobId)
+
+-- [BullMQ 风格] 释放独立锁
+releaseLock({ ns = ns, jobId = completedJobId, token = currentJobToken })
 
 -- Part 3: Record job metadata (completed or failed)
 

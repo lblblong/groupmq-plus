@@ -224,16 +224,35 @@ export type WorkerOptions<T> = {
    * Interval in milliseconds between stalled job checks.
    * Stalled jobs are those whose worker crashed or lost connection.
    *
-   * @default 30000 (30 seconds)
-   * @example 60000 // Check every minute for lower overhead
-   * @example 10000 // Check every 10 seconds for faster recovery
+   * @default 2000 (2 seconds) - Optimized for fast recovery
+   * @example 5000 // Check every 5 seconds for lower overhead
+   * @example 1000 // Check every second for fastest recovery
+   *
+   * **Recovery time calculation:**
+   * Worst case recovery = jobTimeoutMs + stalledInterval
+   * Default: 5s (lock TTL) + 2s (check interval) = 7s recovery
    *
    * **When to adjust:**
-   * - Fast recovery needed: Decrease (10-20s)
-   * - Lower Redis overhead: Increase (60s+)
-   * - Unreliable workers: Decrease for faster detection
+   * - Fastest recovery: Decrease to 1000ms
+   * - Lower Redis overhead: Increase to 5000-10000ms
+   * - High concurrency (100+ workers): Consider 3000-5000ms
    */
   stalledInterval?: number
+
+  /**
+   * Maximum number of jobs to scan per stalled check cycle.
+   * Controls how many jobs in the processing set are checked for expired locks.
+   *
+   * @default 500
+   * @example 1000 // For high concurrency systems with 500+ concurrent jobs
+   * @example 100 // For low concurrency systems to reduce Redis load
+   *
+   * **When to adjust:**
+   * - High concurrency (500+ jobs): Increase to ensure all jobs are checked
+   * - Low concurrency: Decrease to reduce Redis overhead
+   * - If stalled jobs are not being detected: Increase this value
+   */
+  maxJobsPerScan?: number
 
   /**
    * Maximum number of times a job can become stalled before being failed.
@@ -332,6 +351,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   private stalledCheckTimer?: NodeJS.Timeout
   private stalledInterval: number
   private maxStalledCount: number
+  private maxJobsPerScan: number
   private stalledGracePeriod: number
 
   // Maintenance (Watchdog) for group state repair
@@ -386,14 +406,20 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     this.concurrency = Math.max(1, opts.concurrency ?? 1)
 
     // Initialize stalled job detection settings
-    // BullMQ-inspired: More conservative settings for high concurrency
-    this.stalledInterval =
-      opts.stalledInterval ?? (this.concurrency > 50 ? 60000 : 30000) // 60s for high concurrency, 30s otherwise
+    // BullMQ-style: With independent lock keys that auto-expire, we use short intervals for fast recovery
+    // The lock TTL (jobTimeoutMs) determines when a job becomes stalled, not stalledInterval
+    // stalledInterval only controls how often we check for expired locks
+    // Default: 2s for fast stalled job recovery (worst case: 5s lock + 2s check = 7s recovery)
+    this.stalledInterval = opts.stalledInterval ?? 2000
     this.maxStalledCount =
-      opts.maxStalledCount ?? 2 // Allow 2 stalls for high concurrency
-    // CRITICAL: Grace period must be >= heartbeat startup delay to prevent false positives
-    // Default 5s covers heartbeat startup (2s) + 1 heartbeat interval (2s) + network/load buffer (1s)
-    this.stalledGracePeriod = opts.stalledGracePeriod ?? 5000 // 5s grace for all configurations
+      opts.maxStalledCount ?? 3 // Allow 3 stalls for better tolerance during deployments
+    // maxJobsPerScan: Scale with concurrency to ensure all jobs are checked
+    // Default: max(500, concurrency * 2) to handle high concurrency scenarios
+    this.maxJobsPerScan =
+      opts.maxJobsPerScan ?? Math.max(500, this.concurrency * 2)
+    // With BullMQ-style locks, grace period is less critical since lock expiry is precise
+    // Keep a small grace period for network latency only
+    this.stalledGracePeriod = opts.stalledGracePeriod ?? 0 // No grace period needed with lock-based detection
 
     // Initialize maintenance (Watchdog) interval - default 60 seconds
     this.maintenanceIntervalMs = opts.maintenanceIntervalMs ?? 60000
@@ -982,7 +1008,8 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       const results = await this.q.checkStalledJobs(
         now,
         this.stalledGracePeriod,
-        this.maxStalledCount
+        this.maxStalledCount,
+        this.maxJobsPerScan
       )
 
       if (results.length > 0) {

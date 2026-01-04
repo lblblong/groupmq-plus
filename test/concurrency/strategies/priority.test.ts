@@ -76,7 +76,8 @@ describe('PriorityStrategy', () => {
     worker.run();
     await queue.waitForEmpty();
 
+    // weighted-random 是概率性算法，只验证 group-a 有机会被处理
+    // 不能断言确定性顺序，因为低优先级组也有概率被先选中
     expect(groupSequence).toContain('group-a');
-    expect(groupSequence[0]).toBe('group-a');
   });
 });

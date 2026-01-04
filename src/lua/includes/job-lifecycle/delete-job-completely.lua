@@ -1,5 +1,6 @@
 --- @include "includes/flow/remove-child-from-parent"
 --- @include "includes/group-lifecycle/refresh-group-state"
+--- @include "includes/lock/release-lock"
 
 --[[
   删除任务及其所有关联数据 (Delete Job Completely)
@@ -38,6 +39,8 @@ local function deleteJobCompletely(opts)
   redis.call("ZREM", delayedKey, jobId)
   redis.call("DEL", ns .. ":processing:" .. jobId)
   redis.call("ZREM", processingKey, jobId)
+  -- [BullMQ 风格] 强制释放锁（删除任务时无需验证 token）
+  releaseLock({ ns = ns, jobId = jobId })
 
   -- 从完成/失败保留集中移除
   redis.call("ZREM", ns .. ":completed", jobId)

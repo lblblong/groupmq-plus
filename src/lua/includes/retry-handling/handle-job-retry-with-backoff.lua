@@ -2,6 +2,7 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
 --- @include "includes/group-state/remove-job-from-active"
 --- @include "includes/security/verify-token"
+--- @include "includes/lock/release-lock"
 
 -- 入参:
 --   opts.ns: 命名空间
@@ -47,6 +48,9 @@ local function handleJobRetryWithBackoff(opts)
   -- 只有在实际进行重试时才删除锁
   redis.call("DEL", procKey)
   redis.call("ZREM", ns .. ":processing", jobId)
+
+  -- [BullMQ 风格] 释放独立锁
+  releaseLock({ ns = ns, jobId = jobId, token = token })
 
   -- 从活跃列表移除
   removeJobFromActive({

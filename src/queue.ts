@@ -77,15 +77,18 @@ export type QueueOptions = {
    * Maximum time in milliseconds a job can run before being considered failed.
    * Jobs that exceed this timeout will be retried or moved to failed state.
    *
-   * @default 30000 (30 seconds)
-   * @example 60000 // 1 minute timeout
-   * @example 300000 // 5 minute timeout for long-running jobs
+   * @default 5000 (5 seconds) - Optimized for fast stalled job recovery
+   * @example 60000 // 1 minute timeout for long-running jobs
+   * @example 300000 // 5 minute timeout for very long-running jobs
    *
    * **When to adjust:**
-   * - Long-running jobs: Increase (5-30 minutes)
-   * - Short jobs: Decrease (5-15 seconds) for faster failure detection
+   * - Long-running jobs: Increase (1-30 minutes)
+   * - Short jobs: Keep default (5 seconds) for fast failure detection
    * - External API calls: Consider API timeout + buffer
    * - Database operations: Consider query timeout + buffer
+   *
+   * **Note:** This value determines the lock TTL. Worker heartbeats extend the lock.
+   * If a worker crashes, the job becomes available for recovery after this timeout.
    */
   jobTimeoutMs?: number
 
@@ -638,7 +641,7 @@ export class Queue<T = any> {
     this.rawNs = opts.namespace
     this.name = opts.namespace
     this.ns = `groupmq:${this.rawNs}`
-    const rawVt = opts.jobTimeoutMs ?? 30_000
+    const rawVt = opts.jobTimeoutMs ?? 5_000 // 5s default for fast stalled recovery
     this.vt = Math.max(1, rawVt) // Minimum 1ms
     this.defaultMaxAttempts = opts.maxAttempts ?? 3
     this.scanLimit = opts.reserveScanLimit ?? 20
@@ -2431,13 +2434,14 @@ export class Queue<T = any> {
   async checkStalledJobs(
     now: number,
     gracePeriod: number,
-    maxStalledCount: number
+    maxStalledCount: number,
+    maxJobsPerScan = 500
   ): Promise<string[]> {
     try {
       const results = await evalScript<string[]>(
         this.r,
         'check-stalled',
-        [this.ns, String(now), String(gracePeriod), String(maxStalledCount)],
+        [this.ns, String(now), String(gracePeriod), String(maxStalledCount), String(maxJobsPerScan)],
         1
       )
       return results || []

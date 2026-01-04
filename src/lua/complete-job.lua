@@ -3,6 +3,7 @@
 --- @include "includes/flow/update-parent-flow"
 --- @include "includes/group-lifecycle/refresh-group-state"
 --- @include "includes/job-lifecycle/record-job-finalization"
+--- @include "includes/lock/release-lock"
 
 --[[
   完成任务 (Complete Job)
@@ -73,6 +74,9 @@ redis.call("HSET", jobKey, "status", "completing") -- 临时状态以阻止 stal
 local procKey = ns .. ":processing:" .. jobId
 redis.call("DEL", procKey)
 redis.call("ZREM", processingKey, jobId)
+
+-- [BullMQ 风格] 释放独立锁
+releaseLock({ ns = ns, jobId = jobId, token = token })
 
 -- 从活跃列表移除任务（使用 Options Object 模式）
 removeJobFromActive({

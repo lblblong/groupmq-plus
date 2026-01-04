@@ -3,7 +3,7 @@
 --- @include "includes/stalled-recovery/recover-stalled-jobs-complete"
 
 -- Check for stalled jobs and move them back to waiting or fail them
--- KEYS: namespace, currentTime, gracePeriod, maxStalledCount
+-- KEYS: namespace, currentTime, gracePeriod, maxStalledCount, maxJobsPerScan
 -- Returns: array of [jobId, groupId, action] for each stalled job found
 --   action: "recovered" or "failed"
 
@@ -11,6 +11,7 @@ local ns = KEYS[1]
 local now = tonumber(ARGV[1])
 local gracePeriod = tonumber(ARGV[2]) or 0
 local maxStalledCount = tonumber(ARGV[3]) or 1
+local maxJobsPerScan = tonumber(ARGV[4]) or 500
 
 -- Circuit breaker for high concurrency: limit stalled job recovery
 local circuitBreakerKey = ns .. ":stalled:circuit"
@@ -35,6 +36,7 @@ local results = recoverStalledJobsCompletely({
   now = now,
   gracePeriod = gracePeriod,
   maxStalledCount = maxStalledCount,
+  maxJobsPerScan = maxJobsPerScan,
   readyKey = readyKey,
   limitedKey = limitedKey
 })
