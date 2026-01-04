@@ -74,21 +74,19 @@ export type QueueOptions = {
   namespace: string
 
   /**
-   * Maximum time in milliseconds a job can run before being considered failed.
-   * Jobs that exceed this timeout will be retried or moved to failed state.
-   *
-   * @default 5000 (5 seconds) - Optimized for fast stalled job recovery
-   * @example 60000 // 1 minute timeout for long-running jobs
-   * @example 300000 // 5 minute timeout for very long-running jobs
-   *
-   * **When to adjust:**
-   * - Long-running jobs: Increase (1-30 minutes)
-   * - Short jobs: Keep default (5 seconds) for fast failure detection
-   * - External API calls: Consider API timeout + buffer
-   * - Database operations: Consider query timeout + buffer
-   *
-   * **Note:** This value determines the lock TTL. Worker heartbeats extend the lock.
-   * If a worker crashes, the job becomes available for recovery after this timeout.
+   * 任务运行的超时时间（毫秒），同时也是**分布式锁的 TTL（有效期）**。
+   * 
+   * **机制说明：**
+   * 1. 当 Worker 获取任务时，会创建一个有效期为 `jobTimeoutMs` 的独立锁 Key。
+   * 2. 只要 Worker 存活，它会定期（默认每 1/3 周期）发送心跳自动续期这个锁。
+   * 3. 如果 Worker **崩溃或断网**，心跳停止，锁将在 `jobTimeoutMs` 后自动过期消失。
+   * 4. 锁消失后，其他 Worker 的 StalledChecker 会立即发现并接管该任务。
+   * 
+   * **秒级恢复建议：**
+   * 如果你需要进程重启后任务立即被接管，请将此值设置得较小（例如 5000ms）。
+   * 
+   * @default 5000 (5秒) - 专为快速恢复优化
+   * @example 30000 // 30秒，适合不需要极速恢复的场景
    */
   jobTimeoutMs?: number
 

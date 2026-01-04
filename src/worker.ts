@@ -106,16 +106,13 @@ export type WorkerOptions<T> = {
   handler: (job: Job<T>) => Promise<unknown>
 
   /**
-   * Heartbeat interval in milliseconds to keep jobs alive during processing.
-   * Prevents jobs from timing out during long-running operations.
-   *
-   * @default Math.max(1000, queue.jobTimeoutMs / 3)
-   * @example 5000 // Heartbeat every 5 seconds
-   *
-   * **When to adjust:**
-   * - Long-running jobs: Increase to reduce Redis overhead
-   * - Short jobs: Decrease for faster timeout detection
-   * - High job volume: Increase to reduce Redis commands
+   * 心跳频率（毫秒）。Worker 向 Redis 发送“我还活着”信号并续期任务锁的间隔。
+   * 
+   * **重要规则：**
+   * 此值必须**显著小于** Queue 的 `jobTimeoutMs`（建议至少是 1/3）。
+   * 如果心跳太慢，锁可能会在任务处理过程中意外过期，导致任务被其他 Worker 重复执行。
+   * 
+   * @default Math.max(1000, queue.jobTimeoutMs / 3) // 自动计算，通常无需手动设置
    */
   heartbeatMs?: number
 
@@ -221,21 +218,18 @@ export type WorkerOptions<T> = {
   concurrency?: number
 
   /**
-   * Interval in milliseconds between stalled job checks.
-   * Stalled jobs are those whose worker crashed or lost connection.
-   *
-   * @default 2000 (2 seconds) - Optimized for fast recovery
-   * @example 5000 // Check every 5 seconds for lower overhead
-   * @example 1000 // Check every second for fastest recovery
-   *
-   * **Recovery time calculation:**
-   * Worst case recovery = jobTimeoutMs + stalledInterval
-   * Default: 5s (lock TTL) + 2s (check interval) = 7s recovery
-   *
-   * **When to adjust:**
-   * - Fastest recovery: Decrease to 1000ms
-   * - Lower Redis overhead: Increase to 5000-10000ms
-   * - High concurrency (100+ workers): Consider 3000-5000ms
+   * 僵死任务（Stalled Job）的检测频率（毫秒）。
+   * 
+   * **机制说明：**
+   * Worker 会每隔此时间间隔，扫描正在处理的任务列表，检查它们对应的**锁 Key 是否已消失**。
+   * 如果锁消失了（说明原 Worker 已崩溃），该任务会被立即恢复到等待队列。
+   * 
+   * **恢复速度公式：**
+   * `最大故障恢复时间 ≈ 锁TTL (jobTimeoutMs) + 检测间隔 (stalledInterval)`
+   * 
+   * @default 2000 (2秒) - 配合默认 5秒 TTL，实现约 7秒内接管
+   * @example 1000 // 极速检测，Redis 压力稍大
+   * @example 10000 // 宽松检测，Redis 压力小
    */
   stalledInterval?: number
 
