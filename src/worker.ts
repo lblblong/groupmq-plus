@@ -156,35 +156,6 @@ export type WorkerOptions<T> = {
   backoff?: BackoffStrategy
 
   /**
-   * Whether to enable automatic cleanup of expired and completed jobs.
-   * Cleanup removes old jobs to prevent Redis memory growth.
-   *
-   * @default true
-   * @example false // Disable if you handle cleanup manually
-   *
-   * **When to disable:**
-   * - Manual cleanup: If you have your own cleanup process
-   * - Job auditing: If you need to keep all job history
-   * - Development: For debugging job states
-   */
-  enableCleanup?: boolean
-
-  /**
-   * Interval in milliseconds between cleanup operations.
-   * Cleanup removes expired jobs and trims completed/failed job retention.
-   *
-   * @default 300000 (5 minutes)
-   * @example 600000 // Cleanup every 10 minutes
-   *
-   * **When to adjust:**
-   * - High job volume: Increase to reduce Redis overhead
-   * - Low job volume: Decrease for more frequent cleanup
-   * - Memory constraints: Decrease to prevent Redis memory growth
-   * - Job retention needs: Adjust based on keepCompleted/keepFailed settings
-   */
-  cleanupIntervalMs?: number
-
-  /**
    * Interval in milliseconds between scheduler operations.
    * Scheduler promotes delayed jobs and processes cron/repeating jobs.
    *
@@ -313,6 +284,23 @@ export type WorkerOptions<T> = {
    * - 策略模式：需要确保所有任务添加完毕后再按优先级处理
    */
   autoStart?: boolean
+
+  /**
+   * Interval in milliseconds for maintenance operations (Watchdog).
+   * The maintenance task scans all groups and repairs any that are in "invisible" state
+   * (neither in ready nor limited sets) due to process crashes.
+   *
+   * @default 60000 (1 minute)
+   * @example 30000 // Check every 30 seconds for faster recovery
+   * @example 120000 // Check every 2 minutes for lower Redis overhead
+   * @example 0 // Disable maintenance (not recommended)
+   *
+   * **When to adjust:**
+   * - High reliability needed: Decrease (30-60s)
+   * - Lower Redis overhead: Increase (120s+)
+   * - Many workers: Keep default or increase to reduce thundering herd
+   */
+  maintenanceIntervalMs?: number
 }
 
 const defaultBackoff: BackoffStrategy = (attempt, _error) => {
@@ -334,9 +322,6 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   private closed = false
   private maxAttempts: number
   private backoff: BackoffStrategy
-  private enableCleanup: boolean
-  private cleanupMs: number
-  private cleanupTimer?: NodeJS.Timeout
   private schedulerTimer?: NodeJS.Timeout
   private schedulerMs: number
   private blockingTimeoutSec: number
@@ -348,6 +333,10 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   private stalledInterval: number
   private maxStalledCount: number
   private stalledGracePeriod: number
+
+  // Maintenance (Watchdog) for group state repair
+  private maintenanceTimer?: NodeJS.Timeout
+  private maintenanceIntervalMs: number
 
   // Track all jobs in progress (for all concurrency levels)
   private jobsInProgress = new Set<{ job: ReservedJob<T>; ts: number }>()
@@ -387,8 +376,6 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     this.onError = opts.onError
     this.maxAttempts = opts.maxAttempts ?? this.q.maxAttemptsDefault ?? 3
     this.backoff = opts.backoff ?? defaultBackoff
-    this.enableCleanup = opts.enableCleanup ?? true
-    this.cleanupMs = opts.cleanupIntervalMs ?? 60_000 // 1 minutes for high-concurrency production
 
     // Scheduler interval for delayed jobs and cron jobs
     const defaultSchedulerMs = 1000 // 1 second for responsive job processing
@@ -407,6 +394,9 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     // CRITICAL: Grace period must be >= heartbeat startup delay to prevent false positives
     // Default 5s covers heartbeat startup (2s) + 1 heartbeat interval (2s) + network/load buffer (1s)
     this.stalledGracePeriod = opts.stalledGracePeriod ?? 5000 // 5s grace for all configurations
+
+    // Initialize maintenance (Watchdog) interval - default 60 seconds
+    this.maintenanceIntervalMs = opts.maintenanceIntervalMs ?? 60000
 
     // Set up Redis connection event handlers
     this.setupRedisEventHandlers()
@@ -524,30 +514,17 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
       this.blockingClient = null // fall back to queue's blocking client
     }
 
-    // Start cleanup timer if enabled
-    if (this.enableCleanup) {
-      // Cleanup timer: only runs cleanup, not scheduler
-      // Add jitter to prevent all workers from running cleanup simultaneously
-      this.cleanupTimer = setInterval(async () => {
-        try {
-          await this.q.cleanup()
-        } catch (err) {
-          this.onError?.(err)
-        }
-      }, this.addJitter(this.cleanupMs))
-
-      // Scheduler timer: promotes delayed jobs and processes cron jobs
-      // Runs independently in the background, even when worker is blocked on BZPOPMIN
-      // Distributed lock ensures only one worker executes at a time
-      const schedulerInterval = Math.min(this.schedulerMs, this.cleanupMs)
-      this.schedulerTimer = setInterval(async () => {
-        try {
-          await this.q.runSchedulerOnce()
-        } catch (_err) {
-          // Ignore errors, this is best-effort
-        }
-      }, this.addJitter(schedulerInterval))
-    }
+    // Scheduler timer: promotes delayed jobs and processes cron jobs
+    // Runs independently in the background, even when worker is blocked on BZPOPMIN
+    // Distributed lock ensures only one worker executes at a time
+    const schedulerInterval = this.schedulerMs
+    this.schedulerTimer = setInterval(async () => {
+      try {
+        await this.q.runSchedulerOnce()
+      } catch (_err) {
+        // Ignore errors, this is best-effort
+      }
+    }, this.addJitter(schedulerInterval))
 
     // Start stalled job checker for automatic recovery
     // First, perform an immediate check to recover any stalled jobs from previous crashes
@@ -558,6 +535,9 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     }
 
     this.startStalledChecker()
+
+    // Start maintenance (Watchdog) for group state repair
+    this.startMaintenance()
 
     let connectionRetries = 0
     const maxConnectionRetries = 10 // Allow more retries with exponential backoff
@@ -1031,6 +1011,39 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
   }
 
   /**
+   * Start the maintenance (Watchdog) timer for group state repair.
+   * Periodically scans all groups and repairs any that are in "invisible" state.
+   * Uses jitter to prevent thundering herd when multiple workers are running.
+   * Uses distributed lock to ensure only one worker performs maintenance at a time.
+   */
+  private startMaintenance(): void {
+    if (this.maintenanceIntervalMs <= 0) {
+      return // Disabled
+    }
+
+    // Calculate jitter: 0 to 10% of the interval
+    const jitter = Math.random() * this.maintenanceIntervalMs * 0.1
+    const intervalWithJitter = this.maintenanceIntervalMs + jitter
+
+    this.maintenanceTimer = setInterval(async () => {
+      if (this.stopping || this.closed) return
+
+      try {
+        // Try to acquire distributed lock (TTL = half of interval)
+        const lockTtl = Math.floor(this.maintenanceIntervalMs / 2)
+        const acquired = await this.q.acquireMaintenanceLock(lockTtl)
+
+        if (acquired) {
+          await this.q.repairGroups()
+        }
+      } catch (err) {
+        // Don't throw, just log - maintenance should be resilient
+        this.logger.error('Error in maintenance (repairGroups):', err)
+      }
+    }, intervalWithJitter)
+  }
+
+  /**
    * Get worker performance metrics
    */
   getWorkerMetrics() {
@@ -1062,16 +1075,16 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
     // Otherwise jobsInProgress will be 0 and we will exit immediately
     await this.delay(100)
 
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer)
-    }
-
     if (this.schedulerTimer) {
       clearInterval(this.schedulerTimer)
     }
 
     if (this.stalledCheckTimer) {
       clearInterval(this.stalledCheckTimer)
+    }
+
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer)
     }
 
     // Wait for jobs to finish first

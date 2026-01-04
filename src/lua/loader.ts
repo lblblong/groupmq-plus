@@ -14,7 +14,6 @@ export type ScriptName =
   | 'complete-and-reserve-next-with-metadata'
   | 'retry'
   | 'heartbeat'
-  | 'cleanup'
   | 'promote-delayed'
   | 'promote-staged'
   | 'change-delay'
@@ -28,7 +27,7 @@ export type ScriptName =
   | 'is-empty'
   | 'dead-letter'
   | 'check-stalled'
-  | 'validate-limited-set';
+  | 'repair-groups';
 
 const cacheByClient = new WeakMap<Redis, Map<ScriptName, string>>();
 const metadataCache = new Map<string, ScriptMetadata>();

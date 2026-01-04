@@ -1717,38 +1717,6 @@ export class Queue<T = any> {
   }
 
   /**
-   * Clean up expired jobs and stale data.
-   * Uses distributed lock to ensure only one worker runs cleanup at a time,
-   * similar to scheduler lock pattern.
-   */
-  async cleanup(): Promise<number> {
-    // Try to acquire cleanup lock (similar to scheduler lock)
-    const cleanupLockKey = `${this.ns}:cleanup:lock`
-    const ttlMs = 60000 // 60 seconds - longer than typical cleanup duration
-
-    try {
-      const acquired = await (this.r as any).set(
-        cleanupLockKey,
-        '1',
-        'PX',
-        ttlMs,
-        'NX'
-      )
-
-      if (acquired !== 'OK') {
-        // Another worker is running cleanup
-        return 0
-      }
-
-      // We have the lock, run cleanup
-      const now = Date.now()
-      return evalScript<number>(this.r, 'cleanup', [this.ns, String(now)], 1)
-    } catch (_e) {
-      return 0
-    }
-  }
-
-  /**
    * Calculate adaptive blocking timeout like BullMQ
    * Returns timeout in seconds
    *
@@ -2471,86 +2439,6 @@ export class Queue<T = any> {
   }
 
   /**
-   * [LIMITED GROUP SET] Validate the limited set for consistency
-   * Returns validation report with invalid and missing entries
-   */
-  async validateLimitedSet(): Promise<{
-    total: number
-    valid: number
-    invalid: Array<{ gid: string; reason: string; jobCount: number; activeCount: number; limit: number }>
-    missing: Array<{ gid: string; jobCount: number; activeCount: number; limit: number }>
-  }> {
-    try {
-      const result = await evalScript<string>(
-        this.r,
-        'validate-limited-set',
-        [this.ns],
-        1
-      )
-      return JSON.parse(result)
-    } catch (error) {
-      this.logger.error('Failed to validate limited set', { error })
-      throw error
-    }
-  }
-
-  /**
-   * [LIMITED GROUP SET] Automatically fix invalid entries in the limited set
-   * Rebuilds the limited set based on current activeCount vs concurrency limit
-   */
-  async rebuildLimitedSet(): Promise<number> {
-    let fixed = 0
-    const groups = await this.r.smembers(`${this.ns}:groups`)
-    const limitedKey = `${this.ns}:limited`
-    const readyKey = `${this.ns}:ready`
-
-    for (const gid of groups) {
-      const gZ = `${this.ns}:g:${gid}`
-      const groupActiveKey = `${this.ns}:g:${gid}:active`
-      const configKey = `${this.ns}:config:${gid}`
-
-      const [jobCount, activeCount, concurrencyStr] = await Promise.all([
-        this.r.zcard(gZ),
-        this.r.llen(groupActiveKey),
-        this.r.hget(configKey, 'concurrency')
-      ])
-
-      const limit = parseInt(concurrencyStr || '1', 10)
-      const headRes = await this.r.zrange(gZ, 0, 0, 'WITHSCORES')
-      const headScore = headRes.length >= 2 ? parseFloat(headRes[1]) : null
-
-      if (jobCount === 0) {
-        // Empty gZ: remove from both ready and limited (they only track waiting jobs)
-        if (await this.r.zrem(readyKey, gid)) fixed++
-        if (await this.r.zrem(limitedKey, gid)) fixed++
-      } else if (activeCount >= limit && headScore !== null) {
-
-        // At capacity: should be in limited, not ready
-        const isInReady = await this.r.zscore(readyKey, gid)
-        const isInLimited = await this.r.zscore(limitedKey, gid)
-
-        if (isInReady || !isInLimited) {
-          await this.r.zrem(readyKey, gid)
-          await this.r.zadd(limitedKey, headScore, gid)
-          fixed++
-        }
-      } else if (activeCount < limit && headScore !== null) {
-        // Has capacity: should be in ready, not limited
-        const isInLimited = await this.r.zscore(limitedKey, gid)
-        const isInReady = await this.r.zscore(readyKey, gid)
-
-        if (isInLimited || !isInReady) {
-          await this.r.zrem(limitedKey, gid)
-          await this.r.zadd(readyKey, headScore, gid)
-          fixed++
-        }
-      }
-    }
-
-    return fixed
-  }
-
-  /**
    * Check for stalled jobs and recover or fail them
    * Returns array of [jobId, groupId, action] tuples
    */
@@ -2720,6 +2608,56 @@ export class Queue<T = any> {
     }
 
     this.logger.debug('Staging promoter stopped')
+  }
+
+  /**
+   * Repair all groups by scanning and refreshing their states.
+   * This is the Watchdog mechanism to fix groups that may be in "invisible" state
+   * (neither in ready nor limited sets) due to process crashes during reserveBlocking.
+   * 
+   * Uses SSCAN to iterate through groups in batches, avoiding Redis blocking.
+   * Each batch is processed by a Lua script for atomicity.
+   * 
+   * @param batchSize Number of groups to process per batch (default: 100)
+   * @returns The number of groups scanned and repaired
+   */
+  async repairGroups(batchSize = 100): Promise<number> {
+    const groupsKey = `${this.ns}:groups`
+    let totalRepaired = 0
+    let cursor = '0'
+
+    try {
+      do {
+        // Use SSCAN to get a batch of group IDs
+        const [nextCursor, groupIds] = await this.r.sscan(
+          groupsKey,
+          cursor,
+          'COUNT',
+          batchSize
+        )
+        cursor = nextCursor
+
+        if (groupIds.length === 0) continue
+
+        // Call batch repair Lua script
+        const count = await evalScript<number>(
+          this.r,
+          'repair-groups',
+          [this.ns, JSON.stringify(groupIds)],
+          1
+        )
+        totalRepaired += count
+
+      } while (cursor !== '0')
+
+      if (totalRepaired > 0) {
+        this.logger.info(`Maintenance: Scanned and repaired states for ${totalRepaired} groups`)
+      }
+      return totalRepaired
+    } catch (err) {
+      this.logger.error('Failed to repair groups:', err)
+      return 0
+    }
   }
 
   /**
@@ -2903,6 +2841,32 @@ export class Queue<T = any> {
     } catch (error) {
       this.logger.error(`Error cleaning up group ${groupId}:`, error)
       return 'error'
+    }
+  }
+
+  /**
+   * Maintenance lock key for Watchdog
+   */
+  private maintenanceLockKey(): string {
+    return `${this.ns}:maintenance:lock`
+  }
+
+  /**
+   * Acquire maintenance lock for Watchdog
+   * Ensures only one worker performs maintenance at a time
+   */
+  async acquireMaintenanceLock(ttlMs = 30000): Promise<boolean> {
+    try {
+      const res = (await (this.r as any).set(
+        this.maintenanceLockKey(),
+        '1',
+        'PX',
+        ttlMs,
+        'NX'
+      )) as string | null
+      return res === 'OK'
+    } catch (_e) {
+      return false
     }
   }
 

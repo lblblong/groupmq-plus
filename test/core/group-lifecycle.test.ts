@@ -246,7 +246,6 @@ describe('并发限制 (Limited Set - Hot Spot Issues解决方案)', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     const limitedBefore = await queue.getLimitedGroups();
-    await queue.validateLimitedSet();
     const limitedAfter = await queue.getLimitedGroups();
 
     expect(Array.isArray(limitedBefore)).toBe(true);
