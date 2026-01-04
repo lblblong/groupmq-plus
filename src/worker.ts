@@ -234,17 +234,14 @@ export type WorkerOptions<T> = {
   stalledInterval?: number
 
   /**
-   * Maximum number of jobs to scan per stalled check cycle.
-   * Controls how many jobs in the processing set are checked for expired locks.
-   *
+   * 每次 Stalled 检测扫描的最大任务数。
+   * 
+   * **性能权衡：**
+   * 由于检测脚本需要检查每个任务的锁 Key 是否存在 (EXISTS)，在高并发场景下（如数千个并发任务），
+   * 全量扫描可能会阻塞 Redis。此参数限制了单次扫描的上限。
+   * 
    * @default 500
-   * @example 1000 // For high concurrency systems with 500+ concurrent jobs
-   * @example 100 // For low concurrency systems to reduce Redis load
-   *
-   * **When to adjust:**
-   * - High concurrency (500+ jobs): Increase to ensure all jobs are checked
-   * - Low concurrency: Decrease to reduce Redis overhead
-   * - If stalled jobs are not being detected: Increase this value
+   * @example 1000 // 高并发场景建议调大，确保能及时扫描到所有任务
    */
   maxJobsPerScan?: number
 
