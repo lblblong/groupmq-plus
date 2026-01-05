@@ -173,13 +173,13 @@ describe('Flow API (任务流方法)', () => {
     });
   });
 
-  describe('getDependenciesCount()', () => {
+  describe('getRemainingCount()', () => {
     test('应该返回剩余子任务的正确数量', async ({ createQueue }) => {
       const queue = createQueue();
 
       const parentId = 'parent-deps';
 
-      await queue.addFlow({
+      const parentJob = await queue.addFlow({
         parent: {
           jobId: parentId,
           groupId: 'g-parent',
@@ -204,8 +204,7 @@ describe('Flow API (任务流方法)', () => {
         ],
       });
 
-      const parentJob = await queue.getJob(parentId);
-      const count = await parentJob.getDependenciesCount();
+      const count = await parentJob.getRemainingCount();
 
       expect(count).toBe(3);
     });
@@ -214,7 +213,7 @@ describe('Flow API (任务流方法)', () => {
       const queue = createQueue();
 
       const job = await queue.add({ groupId: 'g1', data: { test: true } });
-      const count = await job.getDependenciesCount();
+      const count = await job.getRemainingCount();
 
       expect(count).toBeNull();
     });

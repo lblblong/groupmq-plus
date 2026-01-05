@@ -1379,110 +1379,122 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
   /**
    * Handle job failure: emit events, retry or dead-letter
+   *
+   * Uses "Action First, Event Later" strategy:
+   * 1. Execute all decision logic (compute retries, check error type)
+   * 2. Execute Redis operations (retry or deadLetter)
+   * 3. Determine final status based on actual results
+   * 4. Emit failed event with correct status
    */
   private async handleJobFailure(
     err: unknown,
     job: ReservedJob<T>,
     jobStartWallTime: number
   ): Promise<void> {
-    // Convert to Job instance for onError callback
-    const jobInstance = Job.fromReserved(this.q, job, {
-      processedOn: jobStartWallTime,
-      status: 'active',
-    })
-    this.onError?.(err, jobInstance)
+    const errObj = err instanceof Error ? err : new Error(String(err))
+    const nextAttempt = job.attempts + 1
 
     // Reset adaptive timeout after job failure
     // This ensures the worker uses the low timeout (0.1s) for the next fetch
     this.blockingStats.consecutiveEmptyReserves = 0
     this.emptyReserveBackoffMs = 0
 
-    // Safely emit error event
-    try {
-      this.emit('error', err instanceof Error ? err : new Error(String(err)))
-    } catch (_emitError) {
-      // Silently ignore emit errors
-    }
+    // 1. Determine if this is unrecoverable or retries are exhausted
+    const isUnrecoverable = err instanceof UnrecoverableError
+    const isRetriesExhausted = nextAttempt >= this.maxAttempts
 
+    let finalStatus: 'failed' | 'delayed' | 'waiting' = 'failed'
+    let delayMs: number | undefined = undefined
     const failedAt = Date.now()
 
-    // Emit failed event
+    // 2. Branch handling: dead-letter or retry
+    if (isUnrecoverable || isRetriesExhausted) {
+      // [Path A: Final Failure]
+      finalStatus = 'failed'
+
+      // Determine attempts count for recording
+      const attemptsToRecord = isRetriesExhausted ? job.maxAttempts : nextAttempt
+
+      await this.deadLetterJob(
+        err,
+        job,
+        jobStartWallTime,
+        failedAt,
+        attemptsToRecord
+      )
+
+      if (isUnrecoverable) {
+        this.logger.info(
+          `Unrecoverable error for job ${job.id}: ${errObj.message}. Skipping retries.`
+        )
+      }
+    } else {
+      // [Path B: Try Retry]
+      const backoffMs = this.backoff(nextAttempt, err)
+
+      // Pre-determine status: has backoff delay = delayed, no delay = waiting
+      finalStatus = backoffMs > 0 ? 'delayed' : 'waiting'
+      delayMs = backoffMs
+
+      // Execute retry operation
+      const retryResult = await this.q.retry(
+        { id: job.id, token: job.token },
+        backoffMs
+      )
+
+      // [Edge case handling]
+      if (retryResult === -1) {
+        // Redis returned -1: server-side detected max attempts exceeded (Double Check)
+        finalStatus = 'failed'
+        delayMs = undefined
+        await this.deadLetterJob(err, job, jobStartWallTime, failedAt, job.maxAttempts)
+      } else if (retryResult === -2) {
+        // Redis returned -2: lock lost / token mismatch - job taken over by another worker
+        this.logger.warn(
+          `Lock lost for job ${job.id}: cannot retry as another worker has taken over`
+        )
+        // Don't emit failed event - worker has lost ownership
+        return
+      } else {
+        // Retry succeeded: record this failed attempt
+        await this.recordFailureAttempt(
+          err,
+          job,
+          jobStartWallTime,
+          failedAt,
+          nextAttempt
+        )
+      }
+    }
+
+    // 3. Construct and emit events (with final, correct status)
+
+    // Call onError callback (for logging, etc.)
+    const jobForError = Job.fromReserved(this.q, job, {
+      processedOn: jobStartWallTime,
+      status: 'active',
+    })
+    this.onError?.(err, jobForError)
+
+    // Emit failed event with the true final status
     this.emit(
       'failed',
       Job.fromReserved(this.q, job, {
         processedOn: jobStartWallTime,
         finishedOn: failedAt,
-        failedReason: err instanceof Error ? err.message : String(err),
-        stacktrace:
-          err instanceof Error
-            ? err.stack
-            : typeof err === 'object' && err !== null
-              ? (err as any).stack
-              : undefined,
-        status: 'failed',
+        failedReason: errObj.message,
+        stacktrace: errObj.stack,
+        status: finalStatus, // <- Core fix: use actual final status
+        delayMs, // <- Include delay information for consumers
       })
     )
 
-    // Calculate next attempt and backoff
-    const nextAttempt = job.attempts + 1
-    if (err instanceof UnrecoverableError) {
-      this.logger.info(
-        `Unrecoverable error for job ${job.id}: ${err instanceof Error ? err.message : String(err)
-        }. Skipping retries.`
-      )
-      await this.deadLetterJob(
-        err,
-        job,
-        jobStartWallTime,
-        failedAt,
-        nextAttempt
-      )
-      return
+    // Emit error event (preserve original behavior)
+    try {
+      this.emit('error', errObj)
+    } catch (_emitError) {
+      // Silently ignore emit errors
     }
-
-    const backoffMs = this.backoff(nextAttempt, err)
-
-    // Check if we should dead-letter (max attempts reached)
-    if (nextAttempt >= this.maxAttempts) {
-      await this.deadLetterJob(
-        err,
-        job,
-        jobStartWallTime,
-        failedAt,
-        nextAttempt
-      )
-      return
-    }
-
-    // Retry the job
-    const retryResult = await this.q.retry({ id: job.id, token: job.token }, backoffMs)
-    if (retryResult === -1) {
-      // Queue-level max attempts exceeded
-      await this.deadLetterJob(
-        err,
-        job,
-        jobStartWallTime,
-        failedAt,
-        job.maxAttempts
-      )
-      return
-    }
-    if (retryResult === -2) {
-      // [NEW] Lock lost: another worker took over the job, abort retry
-      this.logger.warn(
-        `Lock lost for job ${job.id}: cannot retry as another worker has taken over`
-      )
-      return
-    }
-
-    // Record attempt failure
-    await this.recordFailureAttempt(
-      err,
-      job,
-      jobStartWallTime,
-      failedAt,
-      nextAttempt
-    )
   }
 
   /**
