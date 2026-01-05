@@ -5,7 +5,7 @@ export class Job<T = any> {
   public readonly queue: Queue<T>
   public readonly id: string
   public readonly name: string
-  public readonly data: T
+  public data: T
   public readonly groupId: string
   public readonly attemptsMade: number
   public readonly opts: { attempts: number; delay?: number }
@@ -88,18 +88,48 @@ export class Job<T = any> {
     }
   }
 
+  /**
+   * Change the delay of this job.
+   * @param newDelay Delay in milliseconds. 0 means no delay.
+   * @returns true if the delay was changed successfully, false otherwise
+   * @example
+   * await job.changeDelay(5000) // Delay job by 5 seconds
+   * await job.changeDelay(0)    // Remove delay
+   */
   changeDelay(newDelay: number): Promise<boolean> {
     return this.queue.changeDelay(this.id, newDelay)
   }
 
+  /**
+   * Promote a delayed job to be ready immediately.
+   * This is equivalent to calling changeDelay(0).
+   * @example
+   * const job = await queue.add('task', data, { delay: 5000 })
+   * await job.promote() // Job is now ready to be processed immediately
+   */
   async promote(): Promise<void> {
     await this.queue.promote(this.id)
   }
 
+  /**
+   * Remove this job from the queue.
+   * The job will be deleted and cannot be processed.
+   * @example
+   * await job.remove() // Job is deleted from the queue
+   */
   async remove(): Promise<void> {
     await this.queue.remove(this.id)
   }
 
+  /**
+   * Retry this job by putting it back into the queue.
+   * The job's attempt count will be incremented.
+   * If the job has reached its maximum attempts, it will not be retried.
+   * @param _state Optional state parameter (for future use)
+   * @throws Error if the job token is not available
+   * @example
+   * await job.retry() // Job is put back in the queue for retry
+   */
   async retry(_state?: Extract<Status, 'completed' | 'failed'>): Promise<void> {
     if (!this.token) {
       throw new Error(`Cannot retry job ${this.id}: token not available`)
@@ -107,12 +137,65 @@ export class Job<T = any> {
     await this.queue.retry({ id: this.id, token: this.token })
   }
 
+  /**
+   * Update the data payload of this job.
+   * The job.data property is updated immediately in memory.
+   * @param jobData The new data payload
+   * @example
+   * await job.updateData({ color: 'blue' })
+   * job.data // { color: 'blue' } - updated immediately
+   */
   async updateData(jobData: T): Promise<void> {
     await this.queue.updateData(this.id, jobData)
+    this.data = jobData
   }
 
-  async update(jobData: T): Promise<void> {
-    await this.updateData(jobData)
+  /**
+   * Check if this job is currently active (being processed).
+   * @returns true if the job is active
+   */
+  isActive(): boolean {
+    return this.status === 'active'
+  }
+
+  /**
+   * Check if this job is waiting to be processed.
+   * @returns true if the job is waiting
+   */
+  isWaiting(): boolean {
+    return this.status === 'waiting'
+  }
+
+  /**
+   * Check if this job is delayed.
+   * @returns true if the job is delayed
+   */
+  isDelayed(): boolean {
+    return this.status === 'delayed'
+  }
+
+  /**
+   * Check if this job has completed successfully.
+   * @returns true if the job has completed
+   */
+  isCompleted(): boolean {
+    return this.status === 'completed'
+  }
+
+  /**
+   * Check if this job has failed.
+   * @returns true if the job has failed
+   */
+  isFailed(): boolean {
+    return this.status === 'failed'
+  }
+
+  /**
+   * Check if this job is waiting for its children to complete (flow parent).
+   * @returns true if the job is waiting for children
+   */
+  isWaitingChildren(): boolean {
+    return this.status === 'waiting-children'
   }
 
   /**
@@ -140,12 +223,43 @@ export class Job<T = any> {
   }
 
   /**
-   * Get the number of remaining child jobs that haven't completed yet.
-   * @returns Number of remaining dependencies, or null if not a parent job
+   * Get child job counts by status if this job is a parent and has children.
+   * @param opts Optional options to filter which statuses to return
+   * @returns Object with counts of processed, unprocessed, and failed children
+   * @example
+   * const counts = await job.getDependenciesCount()
+   * // { processed: 5, unprocessed: 3, failed: 1 }
    */
-  async getDependenciesCount(): Promise<number | null> {
-    return this.queue.getFlowDependencies(this.id)
+  async getDependenciesCount(opts?: {
+    failed?: boolean
+    processed?: boolean
+    unprocessed?: boolean
+  }): Promise<{
+    failed?: number
+    processed?: number
+    unprocessed?: number
+  }> {
+    const counts = await this.queue.getFlowDependenciesCount(this.id)
+
+    // If no options specified, return all counts
+    if (!opts) {
+      return counts
+    }
+
+    // Filter based on options
+    const result: {
+      failed?: number
+      processed?: number
+      unprocessed?: number
+    } = {}
+
+    if (opts.processed) result.processed = counts.processed
+    if (opts.unprocessed) result.unprocessed = counts.unprocessed
+    if (opts.failed) result.failed = counts.failed
+
+    return result
   }
+
 
   /**
    * Get the parent job of this job (if it's a child in a flow).

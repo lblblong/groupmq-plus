@@ -848,6 +848,51 @@ export class Queue<T = any> {
   }
 
   /**
+   * Gets the count of child jobs by status for a parent job in a flow.
+   * @param parentId The ID of the parent job
+   * @returns Object with counts of processed, unprocessed, and failed children
+   */
+  async getFlowDependenciesCount(parentId: string): Promise<{
+    processed: number
+    unprocessed: number
+    failed: number
+  }> {
+    // Get all child job IDs
+    const childIds = await this.getFlowChildrenIds(parentId)
+    if (childIds.length === 0) {
+      return { processed: 0, unprocessed: 0, failed: 0 }
+    }
+
+    // Get results for completed/failed children
+    const results = await this.r.hgetall(`${this.ns}:flow:results:${parentId}`)
+
+    let processed = 0
+    let failed = 0
+
+    for (const val of Object.values(results)) {
+      try {
+        const envelope = JSON.parse(val)
+        if (envelope.status === 'completed') {
+          processed++
+        } else if (envelope.status === 'failed') {
+          failed++
+        }
+      } catch {
+        // Skip corrupted entries
+      }
+    }
+
+    // Unprocessed = total children - (processed + failed)
+    const unprocessed = childIds.length - processed - failed
+
+    return {
+      processed,
+      unprocessed: Math.max(0, unprocessed),
+      failed,
+    }
+  }
+
+  /**
    * Gets the results of all child jobs in a flow.
    * STRICT MODE: Expects { status, data } structure from Lua scripts.
    * @param parentId The ID of the parent job
