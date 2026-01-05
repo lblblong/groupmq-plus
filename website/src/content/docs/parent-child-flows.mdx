@@ -217,19 +217,19 @@ const result = await queue.addFlow({
 // }
 ```
 
-### Queue.getFlowDependencies(parentId)
+### Queue.getFlowRemainingCount(parentId)
 
 Get the number of remaining child jobs for a parent job.
 
 ```ts
-const remaining = await queue.getFlowDependencies(parentId)
+const remaining = await queue.getFlowRemainingCount(parentId)
 // Returns: number | null
 // - number: count of children not yet completed
 // - null: if the job is not a parent job
 
 // Example: Monitor flow progress
 const total = 10 // You track this when creating the flow
-const remaining = await queue.getFlowDependencies(parentId)
+const remaining = await queue.getFlowRemainingCount(parentId)
 if (remaining !== null) {
   const completed = total - remaining
   console.log(`Progress: ${completed}/${total} children completed`)
@@ -251,7 +251,7 @@ const worker = new Worker({
   queue,
   handler: async (job) => {
     // Check if this is a parent job
-    const remaining = await queue.getFlowDependencies(job.id)
+    const remaining = await queue.getFlowRemainingCount(job.id)
     if (remaining === 0) {
       // All children completed, get their results
       const childResults = await queue.getFlowResults(job.id)

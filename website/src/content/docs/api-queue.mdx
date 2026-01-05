@@ -382,12 +382,12 @@ const limit = await queue.getGroupConcurrency('vip:user:1')
 // Returns: number (default is 1 if not explicitly set)
 ```
 
-### getFlowDependencies(parentId)
+### getFlowRemainingCount(parentId)
 
 Get the number of remaining child jobs for a parent job in a flow.
 
 ```ts
-const remaining = await queue.getFlowDependencies(parentId)
+const remaining = await queue.getFlowRemainingCount(parentId)
 // Returns: number | null
 // - number: count of children not yet completed
 // - null: if the job is not a parent job

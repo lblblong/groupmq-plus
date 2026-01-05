@@ -223,6 +223,31 @@ export class Job<T = any> {
   }
 
   /**
+   * Get the total number of child jobs for this parent job.
+   * @returns The total number of children (0 if no children or this job is not a parent)
+   * @example
+   * const total = await job.getChildrenCount()
+   * // Returns: 10 (this parent has 10 children total)
+   */
+  async getChildrenCount(): Promise<number> {
+    return this.queue.getFlowChildrenCount(this.id)
+  }
+
+  /**
+   * Get the number of remaining child jobs that haven't completed yet.
+   * This is a fast operation that reads a cached value.
+   * @returns The number of remaining children, or null if this job is not a parent
+   * @example
+   * const remaining = await job.getRemainingCount()
+   * // Returns: 5 (5 children still pending)
+   * // Returns: 0 (all children completed)
+   * // Returns: null (this job is not a parent)
+   */
+  async getRemainingCount(): Promise<number | null> {
+    return this.queue.getFlowRemainingCount(this.id)
+  }
+
+  /**
    * Get child job counts by status if this job is a parent and has children.
    * @param opts Optional options to filter which statuses to return
    * @returns Object with counts of processed, unprocessed, and failed children

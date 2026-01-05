@@ -411,7 +411,7 @@ describe('Flow 执行 (父子任务流)', () => {
     // 检查初始状态
     expect(parent.status).toBe('waiting-children');
 
-    const remaining = await queue.getFlowDependencies(parentId);
+    const remaining = await queue.getFlowRemainingCount(parentId);
     expect(remaining).toBe(2);
 
     const worker = createWorker({
@@ -430,7 +430,7 @@ describe('Flow 执行 (父子任务流)', () => {
     expect((await queue.getJob(child1Id)).status).toBe('completed');
     expect((await queue.getJob(child2Id)).status).toBe('completed');
     expect((await queue.getJob(parentId)).status).toBe('completed');
-    expect(await queue.getFlowDependencies(parentId)).toBe(0);
+    expect(await queue.getFlowRemainingCount(parentId)).toBe(0);
   });
 
   test('应该在子任务完全失败时触发父任务', async ({ createQueue, createWorker }) => {
@@ -665,7 +665,7 @@ describe('Flow 执行 (父子任务流)', () => {
 
     // 验证流与 groupConfigs 正确协作
     expect(parent.status).toBe('waiting-children');
-    const remaining = await queue.getFlowDependencies(parent.id);
+    const remaining = await queue.getFlowRemainingCount(parent.id);
     expect(remaining).toBe(2);
   });
 
@@ -761,7 +761,7 @@ describe('Flow 执行 (父子任务流)', () => {
 
     // 验证流与自定义 configs 正确协作
     expect(parent.status).toBe('waiting-children');
-    const remaining = await queue.getFlowDependencies(parent.id);
+    const remaining = await queue.getFlowRemainingCount(parent.id);
     expect(remaining).toBe(2);
   });
 });

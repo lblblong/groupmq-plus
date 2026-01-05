@@ -839,7 +839,7 @@ export class Queue<T = any> {
    * @param parentId The ID of the parent job
    * @returns The number of remaining children, or null if the job is not a parent
    */
-  async getFlowDependencies(parentId: string): Promise<number | null> {
+  async getFlowRemainingCount(parentId: string): Promise<number | null> {
     const remaining = await this.r.hget(
       `${this.ns}:job:${parentId}`,
       'flowRemaining'
@@ -937,6 +937,16 @@ export class Queue<T = any> {
       }
     }
     return parsed
+  }
+
+  /**
+   * Gets the number of all child jobs for a parent job in a flow.
+   * This is more efficient than getFlowChildrenIds().length as it only counts without loading IDs.
+   * @param parentId The ID of the parent job
+   * @returns The total number of child jobs (0 if no children or parent doesn't exist)
+   */
+  async getFlowChildrenCount(parentId: string): Promise<number> {
+    return this.r.scard(`${this.ns}:flow:children:${parentId}`)
   }
 
   /**
