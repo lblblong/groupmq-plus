@@ -2,7 +2,7 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/lock/check-lock"
 --- @include "includes/lock/release-lock"
-
+--- @include "includes/flow/update-parent-flow"
 -- 入参: opts.ns, opts.now, opts.gracePeriod, opts.maxStalledCount, opts.maxJobsPerScan
 -- 功能: 查询过期任务，恢复或失败处理
 -- 返回: 处理结果数组 [jobId, groupId, action, ...]
@@ -34,7 +34,7 @@ local function recoverStalledJobsCompletely(opts)
     if lockExists == 0 then
       -- 锁已过期，任务 stalled
       local jobKey = ns .. ":job:" .. jobId
-      local h = redis.call("HMGET", jobKey, "groupId", "stalledCount", "maxAttempts", "attempts", "status", "score", "delayUntil")
+      local h = redis.call("HMGET", jobKey, "groupId", "stalledCount", "maxAttempts", "attempts", "status", "score", "delayUntil", "parentId")
       local groupId = h[1]
 
       if groupId then
@@ -44,6 +44,7 @@ local function recoverStalledJobsCompletely(opts)
         local status = h[5]
         local score = tonumber(h[6])
         local delayUntil = tonumber(h[7] or "0")
+        local parentId = h[8]
 
         if status == "processing" then
           stalledCount = stalledCount + 1
@@ -75,6 +76,21 @@ local function recoverStalledJobsCompletely(opts)
             -- [BullMQ 风格] 强制释放锁（无需 token，因为锁已过期）
             releaseLock({ ns = ns, jobId = jobId })
             redis.call("HSET", jobKey, "status", "failed", "finishedOn", now, "failedReason", failReason)
+            
+            -- [FIX] 如果是子任务，通知父任务流
+            if parentId then
+              updateParentFlow({
+                ns = ns,
+                parentId = parentId,
+                childId = jobId,
+                status = "failed",
+                resultOrError = cjson.encode({ message = failReason, name = "StalledError" }),
+                timestamp = now,
+                readyKey = readyKey,
+                limitedKey = limitedKey
+              })
+            end
+            
             redis.call("ZADD", ns .. ":failed", now, jobId)
             table.insert(results, jobId)
             table.insert(results, groupId)
