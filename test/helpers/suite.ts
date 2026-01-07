@@ -1,5 +1,5 @@
 import { test as base } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { v7 as uuidv7 } from 'uuid';
 import { Queue, Worker, type QueueOptions, type WorkerOptions, waitUntil, waitUntilOrThrow, type WaitForEmptyOptions } from '../../src';
 import { createRedis } from './redis';
 import type { Redis } from 'ioredis';
@@ -26,7 +26,7 @@ interface GroupMQFixtures {
 export const test = base.extend<GroupMQFixtures>({
   // 1. 命名空间隔离
   namespace: async ({ }, use) => {
-    const ns = `test:${randomUUID()}`;
+    const ns = `test:${uuidv7()}`;
     await use(ns);
   },
 

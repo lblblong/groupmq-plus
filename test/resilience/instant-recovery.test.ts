@@ -1,7 +1,7 @@
 import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { Queue, Worker } from '../../src';
 import { createRedis } from '../helpers/redis';
-import { randomUUID } from 'node:crypto';
+import { v7 as uuidv7 } from 'uuid';
 
 /**
  * BullMQ 风格独立锁测试
@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
  */
 describe('BullMQ 风格秒级恢复 (BullMQ-style Instant Recovery)', () => {
   test('独立锁 Key 应该在 TTL 后自动过期', async () => {
-    const namespace = `test:lock-expiry:${randomUUID()}`;
+    const namespace = `test:lock-expiry:${uuidv7()}`;
 
     const redis1 = createRedis();
     const redis2 = createRedis();
@@ -66,7 +66,7 @@ describe('BullMQ 风格秒级恢复 (BullMQ-style Instant Recovery)', () => {
   }, 15000);
 
   test('新 Worker 启动时应立即检测到无锁任务并恢复', async () => {
-    const namespace = `test:instant-recovery:${randomUUID()}`;
+    const namespace = `test:instant-recovery:${uuidv7()}`;
 
     const crashingRedis = createRedis();
     const recoveryRedis = createRedis();
@@ -151,7 +151,7 @@ describe('BullMQ 风格秒级恢复 (BullMQ-style Instant Recovery)', () => {
   }, 20000);
 
   test('心跳应该续期独立锁，防止长任务被误判', async () => {
-    const namespace = `test:heartbeat-lock:${randomUUID()}`;
+    const namespace = `test:heartbeat-lock:${uuidv7()}`;
 
     const redis = createRedis();
     const checkRedis = createRedis();

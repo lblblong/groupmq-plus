@@ -1,7 +1,7 @@
 import { describe, expect, test, waitUntil } from '../helpers/suite';
 import { Queue, Worker } from '../../src';
 import { createRedis } from '../helpers/redis';
-import { randomUUID } from 'node:crypto';
+import { v7 as uuidv7 } from 'uuid';
 
 /**
  * Worker 进程硬崩溃测试
@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
  */
 describe('Worker 进程崩溃恢复 (Worker Process Crash Recovery)', () => {
   test('应当在 Worker 突然停止后恢复任务 (should recover job after worker suddenly stops)', async () => {
-    const namespace = `test:crash:${randomUUID()}`;
+    const namespace = `test:crash:${uuidv7()}`;
 
     // 创建独立的 Redis 连接用于崩溃的 Worker
     const crashingRedis = createRedis();
@@ -141,7 +141,7 @@ describe('Worker 进程崩溃恢复 (Worker Process Crash Recovery)', () => {
   }, 30000);
 
   test('应当在多个任务场景下正确恢复 (should recover multiple jobs correctly)', async () => {
-    const namespace = `test:crash-multi:${randomUUID()}`;
+    const namespace = `test:crash-multi:${uuidv7()}`;
 
     const crashingRedis = createRedis();
     const recoveryRedis = createRedis();
@@ -239,7 +239,7 @@ describe('Worker 进程崩溃恢复 (Worker Process Crash Recovery)', () => {
   }, 30000);
 
   test('应当在 Worker 崩溃后保持数据一致性 (should maintain data consistency after worker crash)', async () => {
-    const namespace = `test:crash-consistency:${randomUUID()}`;
+    const namespace = `test:crash-consistency:${uuidv7()}`;
 
     const crashingRedis = createRedis();
     const recoveryRedis = createRedis();
@@ -335,7 +335,7 @@ describe('Worker 进程崩溃恢复 (Worker Process Crash Recovery)', () => {
   }, 30000);
 
   test('应当在高并发场景下正确恢复任务 (should recover jobs correctly in high concurrency scenario)', async () => {
-    const namespace = `test:crash-concurrent:${randomUUID()}`;
+    const namespace = `test:crash-concurrent:${uuidv7()}`;
 
     const crashingRedis = createRedis();
     const recoveryRedis = createRedis();

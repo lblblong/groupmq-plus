@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { v7 as uuidv7 } from 'uuid';
 import CronParser from 'cron-parser'
 import type Redis from 'ioredis'
 import { type Job, Job as JobEntity } from './job'
@@ -694,7 +694,7 @@ export class Queue<T = any> {
     const maxAttempts = opts.maxAttempts ?? this.defaultMaxAttempts
     const orderMs = opts.orderMs ?? Date.now()
     const now = Date.now()
-    const jobId = opts.jobId ?? randomUUID()
+    const jobId = opts.jobId ?? uuidv7()
 
     if (opts.repeat) {
       // Keep existing behavior for repeating jobs (returns a repeat key string)
@@ -764,7 +764,7 @@ export class Queue<T = any> {
   async addFlow<PT = any, CT = any>(
     flow: FlowOptions<PT, CT>
   ): Promise<JobEntity<PT>> {
-    const parentId = flow.parent.jobId ?? randomUUID()
+    const parentId = flow.parent.jobId ?? uuidv7()
     const parentMaxAttempts = flow.parent.maxAttempts ?? this.defaultMaxAttempts
     const parentOrderMs = flow.parent.orderMs ?? Date.now()
     const parentData = JSON.stringify(
@@ -777,7 +777,7 @@ export class Queue<T = any> {
     const childrenArgs: string[] = []
 
     for (const child of flow.children) {
-      const childId = child.jobId ?? randomUUID()
+      const childId = child.jobId ?? uuidv7()
       const childMaxAttempts = child.maxAttempts ?? this.defaultMaxAttempts
       const childOrderMs = child.orderMs ?? Date.now()
       const childDelay = child.delay ?? 0
@@ -1173,7 +1173,7 @@ export class Queue<T = any> {
 
   async reserve(): Promise<ReservedJob<T> | null> {
     const now = Date.now()
-    const token = randomUUID() // [NEW] Generate token
+    const token = uuidv7() // [NEW] Generate token
 
     const raw = await evalScript<string | null>(
       this.r,
@@ -1318,7 +1318,7 @@ export class Queue<T = any> {
     }
   ): Promise<ReservedJob<T> | null> {
     const now = Date.now()
-    const nextJobToken = randomUUID() // [NEW] Generate token for potentially next job
+    const nextJobToken = uuidv7() // [NEW] Generate token for potentially next job
 
     try {
       const result = await evalScript<string | null>(
@@ -1949,7 +1949,7 @@ export class Queue<T = any> {
    */
   public async reserveAtomic(groupId: string): Promise<ReserveResult<T>> {
     const now = Date.now()
-    const generatedToken = randomUUID() // [NEW] Generate token
+    const generatedToken = uuidv7() // [NEW] Generate token
 
     const result = await evalScript<string | null>(
       this.r,
@@ -2043,7 +2043,7 @@ export class Queue<T = any> {
    */
   async reserveBatch(maxBatch = 16): Promise<Array<ReservedJob<T>>> {
     const now = Date.now()
-    const tokenBase = randomUUID() // [NEW] Generate unique base for batch tokens
+    const tokenBase = uuidv7() // [NEW] Generate unique base for batch tokens
 
     const results = await evalScript<Array<string | null>>(
       this.r,
@@ -2515,7 +2515,7 @@ export class Queue<T = any> {
     }
 
     this.promoterRunning = true
-    this.promoterLockId = randomUUID()
+    this.promoterLockId = uuidv7()
 
     try {
       // Create duplicate Redis connection for pub/sub
@@ -3028,7 +3028,7 @@ export class Queue<T = any> {
             String(repeatJobData.maxAttempts ?? this.defaultMaxAttempts),
             String(repeatJobData.orderMs ?? now),
             String(0),
-            String(randomUUID()),
+            String(uuidv7()),
             String(this.keepCompleted),
           ],
           1
