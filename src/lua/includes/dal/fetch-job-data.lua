@@ -18,7 +18,7 @@ local function fetchJobData(opts)
   local jobId = opts.jobId
   local jobKey = ns .. ":job:" .. jobId
 
-  local job = redis.call("HMGET", jobKey, "id", "groupId", "data", "attempts", "maxAttempts", "seq", "timestamp", "orderMs", "score", "isFlowParent")
+  local job = redis.call("HMGET", jobKey, "id", "groupId", "data", "attempts", "maxAttempts", "seq", "timestamp", "orderMs", "score", "isFlowParent", "parentId")
 
   -- 基础校验：如果 ID 为空，说明数据损坏或任务已丢失
   if not job[1] or job[1] == false then
@@ -35,6 +35,7 @@ local function fetchJobData(opts)
     timestamp = job[7],
     orderMs = job[8],
     score = job[9],
-    isFlowParent = job[10]
+    isFlowParent = job[10],
+    parentId = job[11]
   }
 end

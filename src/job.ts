@@ -332,6 +332,7 @@ export class Job<T = any> {
       timestamp: reserved.timestamp ? reserved.timestamp : Date.now(),
       orderMs: reserved.orderMs,
       status: coerceStatus(meta?.status as any),
+      parentId: reserved.parentId,
       isFlowParent: reserved.isFlowParent,
       token: reserved.token, // [NEW] Pass token from reserved job
     })

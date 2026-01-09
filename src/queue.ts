@@ -1,11 +1,11 @@
+import CronParser from 'cron-parser';
+import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import CronParser from 'cron-parser'
-import type Redis from 'ioredis'
-import { type Job, Job as JobEntity } from './job'
-import { Logger, type LoggerInterface } from './logger'
-import { evalScript } from './lua/loader'
-import type { Status } from './status'
-import { type WaitForEmptyOptions, type QueueStateSnapshot, WaitForEmptyTimeoutError } from './helpers'
+import { type QueueStateSnapshot, type WaitForEmptyOptions, WaitForEmptyTimeoutError } from './helpers';
+import { type Job, Job as JobEntity } from './job';
+import { Logger, type LoggerInterface } from './logger';
+import { evalScript } from './lua/loader';
+import type { Status } from './status';
 
 /**
  * 组配置选项（用于 queue.add 的 groupConfig 参数）
@@ -451,6 +451,7 @@ export type ReservedJob<T = any> = {
   deadlineAt: number
   isFlowParent: boolean
   token: string // [NEW] Processing token for fencing
+  parentId?: string
 }
 
 function nsKey(ns: string, ...parts: string[]) {
@@ -1185,7 +1186,7 @@ export class Queue<T = any> {
     if (!raw) return null
 
     const parts = raw.split('|||')
-    if (parts.length !== 12) return null // [NEW] Changed from 11 to 12
+    if (parts.length !== 13) return null // [NEW] Changed from 12 to 13 (added parentId)
 
     let data: T
     try {
@@ -1213,6 +1214,7 @@ export class Queue<T = any> {
       deadlineAt: Number.parseInt(parts[9], 10),
       isFlowParent: parts[10] === '1',
       token: parts[11], // [NEW] Extract token
+      parentId: parts[12] || undefined, // [NEW] Extract parentId
     } as ReservedJob<T>
 
     return job
@@ -1351,7 +1353,7 @@ export class Queue<T = any> {
 
       // Parse the result (same format as reserve methods)
       const parts = result.split('|||')
-      if (parts.length !== 12) { // [NEW] Changed from 11 to 12
+      if (parts.length !== 13) { // [NEW] Changed from 12 to 13
         this.logger.error(
           'Queue completeAndReserveNextWithMetadata: unexpected result format:',
           result
@@ -1372,6 +1374,7 @@ export class Queue<T = any> {
         deadline,
         isFlowParent,
         token, // [NEW]
+        parentId, // [NEW]
       ] = parts
 
       return {
@@ -1387,6 +1390,7 @@ export class Queue<T = any> {
         deadlineAt: parseInt(deadline, 10),
         isFlowParent: isFlowParent === '1',
         token, // [NEW]
+        parentId: parentId || undefined, // [NEW]
       }
     } catch (error) {
       this.logger.error(
@@ -1970,7 +1974,7 @@ export class Queue<T = any> {
 
     // Parse the delimited string response (same format as regular reserve)
     const parts = result.split('|||')
-    if (parts.length < 12) { // [NEW] Changed from 11 to 12
+    if (parts.length < 13) { // [NEW] Changed from 12 to 13
       return { status: 'empty' }
     }
 
@@ -1987,6 +1991,7 @@ export class Queue<T = any> {
       deadline,
       isFlowParent,
       token, // [NEW]
+      parentId, // [NEW]
     ] = parts
 
     const parsedTimestamp = parseInt(timestamp, 10)
@@ -2005,7 +2010,8 @@ export class Queue<T = any> {
       deadlineAt: parseInt(deadline, 10),
       isFlowParent: isFlowParent === '1',
       token, // [NEW]
-    }
+      parentId: parentId || undefined, // [NEW]
+    } as ReservedJob<T>
 
     return { status: 'success', job }
   }
@@ -2055,7 +2061,7 @@ export class Queue<T = any> {
     for (const r of results || []) {
       if (!r) continue
       const parts = r.split('|||')
-      if (parts.length !== 12) continue // [NEW] Changed from 11 to 12
+      if (parts.length !== 13) continue // [NEW] Changed from 12 to 13
       out.push({
         id: parts[0],
         groupId: parts[1],
@@ -2069,6 +2075,7 @@ export class Queue<T = any> {
         deadlineAt: parseInt(parts[9], 10),
         isFlowParent: parts[10] === '1',
         token: parts[11], // [NEW]
+        parentId: parts[12] || undefined, // [NEW]
       } as ReservedJob<T>)
     }
     return out

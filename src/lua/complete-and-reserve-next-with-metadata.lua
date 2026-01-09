@@ -238,5 +238,6 @@ return formatJobResponse({
   score = nextJob.score,
   deadline = nextJob.deadline,
   isFlowParent = nextJob.isFlowParent,
-  token = nextJobToken
+  token = nextJobToken,
+  parentId = nextJob.parentId
 })

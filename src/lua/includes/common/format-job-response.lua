@@ -1,4 +1,4 @@
---- @param job table Job object containing id (or jobId), groupId, payload, attempts, maxAttempts, seq, timestamp, orderMs, score, deadline, isFlowParent, token
+--- @param job table Job object containing id (or jobId), groupId, payload, attempts, maxAttempts, seq, timestamp, orderMs, score, deadline, isFlowParent, token, parentId
 --- @return string Formatted job response string with ||| separator
 local function formatJobResponse(job)
   local id = job.id or job.jobId
@@ -13,5 +13,6 @@ local function formatJobResponse(job)
          job.score .. "|||" ..
          job.deadline .. "|||" ..
          (job.isFlowParent or "0") .. "|||" ..
-         job.token
+         job.token .. "|||" ..
+         (job.parentId or "")
 end

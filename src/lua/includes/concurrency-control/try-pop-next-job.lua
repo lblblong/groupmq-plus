@@ -122,6 +122,7 @@ local function tryPopNextJob(options)
   local orderMs = job.orderMs
   local score = job.score
   local isFlowParent = job.isFlowParent
+  local parentId = job.parentId
 
   -- [添加到活跃列表]
   redis.call("LPUSH", groupActiveKey, jobId)
@@ -160,6 +161,7 @@ local function tryPopNextJob(options)
     orderMs = orderMs,
     score = score,
     isFlowParent = isFlowParent or "0",
+    parentId = parentId or "",
     deadline = tostring(deadline),  -- 转换为字符串便于返回
     token = token
   }
