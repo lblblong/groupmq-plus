@@ -1,4 +1,5 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
+--- @include "includes/common/validate-job-integrity"
 
 -- Promote staged jobs that are now ready to be processed
 -- argv: ns, now, limit
@@ -18,32 +19,41 @@ local readyJobs = redis.call("ZRANGEBYSCORE", stageKey, 0, now, "LIMIT", 0, limi
 
 for i = 1, #readyJobs do
   local jobId = readyJobs[i]
-  local jobKey = ns .. ":job:" .. jobId
+  
+  local isValid = validateJobIntegrity({
+    ns = ns,
+    jobId = jobId,
+    refKey = stageKey
+  })
 
-  -- Get job metadata
-  local jobData = redis.call("HMGET", jobKey, "groupId", "score", "status")
-  local groupId = jobData[1]
-  local score = jobData[2]
-  local status = jobData[3]
+  if isValid then
+    local jobKey = ns .. ":job:" .. jobId
 
-  if groupId and score and status == "staged" then
-    local gZ = ns .. ":g:" .. groupId
+    -- Get job metadata
+    local jobData = redis.call("HMGET", jobKey, "groupId", "score", "status")
+    local groupId = jobData[1]
+    local score = jobData[2]
+    local status = jobData[3]
 
-    -- Remove from staging set
-    redis.call("ZREM", stageKey, jobId)
+    if groupId and score and status == "staged" then
+      local gZ = ns .. ":g:" .. groupId
 
-    -- Add to group ZSET with original score
-    redis.call("ZADD", gZ, tonumber(score), jobId)
-    redis.call("SADD", ns .. ":groups", groupId)
+      -- Remove from staging set
+      redis.call("ZREM", stageKey, jobId)
 
-    -- Update job status from "staged" to "waiting"
-    redis.call("HSET", jobKey, "status", "waiting")
+      -- Add to group ZSET with original score
+      redis.call("ZADD", gZ, tonumber(score), jobId)
+      redis.call("SADD", ns .. ":groups", groupId)
 
-    -- Update group ready/limited state using centralized module
-    -- Module will internally fetch headScore if needed
-    updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
+      -- Update job status from "staged" to "waiting"
+      redis.call("HSET", jobKey, "status", "waiting")
 
-    promotedCount = promotedCount + 1
+      -- Update group ready/limited state using centralized module
+      -- Module will internally fetch headScore if needed
+      updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
+
+      promotedCount = promotedCount + 1
+    end
   end
 end
 

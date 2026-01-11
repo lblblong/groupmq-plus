@@ -1,5 +1,6 @@
 --- @include "includes/group-lifecycle/update-group-ready-limited-state"
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/common/validate-job-integrity"
 
 --[[
   将延迟任务晋升到等待队列 (Promote Delayed Job to Waiting)
@@ -24,8 +25,16 @@ local function promoteDelayedJobToWaiting(options)
 
   local jobKey = ns .. ":job:" .. jobId
 
-  -- 基本验证
-  if redis.call("EXISTS", jobKey) == 0 then return "not-found" end
+  -- 基本验证 + 自愈处理
+  local isValid = validateJobIntegrity({
+    ns = ns,
+    jobId = jobId,
+    refKey = delayedKey
+  })
+
+  if not isValid then
+    return "not-found" -- delayed 集合中的幽灵已清理
+  end
 
   -- 从延迟集合移除
   redis.call("ZREM", delayedKey, jobId)
@@ -46,11 +55,7 @@ local function promoteDelayedJobToWaiting(options)
   redis.call("SADD", ns .. ":groups", groupId)
 
   -- 更新群组状态（ready 或 limited）
-  local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-  if head and #head >= 2 then
-    local headScore = tonumber(head[2])
-    updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey, headScore = headScore })
-  end
+  updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
 
   return "promoted"
 end

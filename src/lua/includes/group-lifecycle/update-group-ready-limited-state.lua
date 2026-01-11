@@ -1,4 +1,5 @@
 --- @include "includes/concurrency-control/is-group-at-capacity"
+--- @include "includes/common/validate-group-integrity"
 
 -- 入参:
 --   opts.ns: 命名空间
@@ -16,10 +17,15 @@ local function updateGroupReadyLimitedState(opts)
   local headScore = opts.headScore
 
   if not headScore then
-    local gZ = ns .. ":g:" .. groupId
-    local head = redis.call("ZRANGE", gZ, 0, 0, "WITHSCORES")
-    if not head or #head < 2 then return end
-    headScore = tonumber(head[2])
+    headScore = validateGroupIntegrity({
+      ns = ns,
+      groupId = groupId,
+      readyKey = readyKey,
+      limitedKey = limitedKey
+    })
+
+    -- 群组为空或不存在，validateGroupIntegrity 已完成清理
+    if not headScore then return end
   end
 
   if isGroupAtCapacity({ ns = ns, groupId = groupId }) then

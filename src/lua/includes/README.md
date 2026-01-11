@@ -160,6 +160,14 @@ end
   - 检查队列是否暂停
   - 被调用于：reserve.lua, reserve-atomic.lua, reserve-batch.lua
 
+- **validateJobIntegrity** (`common/validate-job-integrity.lua`)
+  - 验证任务 Hash 是否存在，若不存在自动清理引用
+  - 被调用于：promote-delayed.lua, promote-staged.lua, recover-stalled.lua
+
+- **validateGroupIntegrity** (`common/validate-group-integrity.lua`)
+  - 验证群组是否有效，若无效自动从 Ready/Limited 队列移除
+  - 被调用于：update-group-ready-limited-state.lua
+
 ### 并发控制 (concurrency-control/)
 
 - **getGroupActiveCount** (`concurrency-control/get-group-active-count.lua`)
@@ -294,8 +302,8 @@ end
 
 ## 统计信息
 
-- **总函数数**：29
-- **被使用的函数**：28（96.6%）
+- **总函数数**：31
+- **被使用的函数**：30（96.8%）
 - **未被使用的函数**：1
   - `promoteJobFromDelayed` (delayed-handling/promote-job-from-delayed.lua) - 已被 `promoteDelayedJobToWaiting` 替代
 

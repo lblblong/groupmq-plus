@@ -3,6 +3,7 @@
 --- @include "includes/lock/check-lock"
 --- @include "includes/lock/release-lock"
 --- @include "includes/flow/update-parent-flow"
+--- @include "includes/common/validate-job-integrity"
 -- 入参: opts.ns, opts.now, opts.gracePeriod, opts.maxStalledCount, opts.maxJobsPerScan
 -- 功能: 查询过期任务，恢复或失败处理
 -- 返回: 处理结果数组 [jobId, groupId, action, ...]
@@ -32,110 +33,121 @@ local function recoverStalledJobsCompletely(opts)
     local lockExists = checkLock({ ns = ns, jobId = jobId })
     
     if lockExists == 0 then
-      -- 锁已过期，任务 stalled
-      local jobKey = ns .. ":job:" .. jobId
-      local h = redis.call("HMGET", jobKey, "groupId", "stalledCount", "maxAttempts", "attempts", "status", "score", "delayUntil", "parentId")
-      local groupId = h[1]
+      -- 锁已过期，任务 stalled；先检查任务是否仍存在
+      local isValid = validateJobIntegrity({
+        ns = ns,
+        jobId = jobId,
+        refKey = processingKey
+      })
 
-      if groupId then
-        local stalledCount = tonumber(h[2]) or 0
-        local maxAttempts = tonumber(h[3]) or 3
-        local attempts = tonumber(h[4]) or 0
-        local status = h[5]
-        local score = tonumber(h[6])
-        local delayUntil = tonumber(h[7] or "0")
-        local parentId = h[8]
+      if not isValid then
+        -- 任务已丢失，清理 processing 专用 Key 后继续
+        redis.call("DEL", ns .. ":processing:" .. jobId)
+      else
+        local jobKey = ns .. ":job:" .. jobId
+        local h = redis.call("HMGET", jobKey, "groupId", "stalledCount", "maxAttempts", "attempts", "status", "score", "delayUntil", "parentId")
+        local groupId = h[1]
 
-        if status == "processing" then
-          stalledCount = stalledCount + 1
-          attempts = attempts + 1
-          redis.call("HSET", jobKey, "stalledCount", stalledCount, "attempts", attempts)
+        if groupId then
+          local stalledCount = tonumber(h[2]) or 0
+          local maxAttempts = tonumber(h[3]) or 3
+          local attempts = tonumber(h[4]) or 0
+          local status = h[5]
+          local score = tonumber(h[6])
+          local delayUntil = tonumber(h[7] or "0")
+          local parentId = h[8]
 
-          -- 从活跃列表移除
-          local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
-          redis.call("LREM", groupActiveKey, 1, jobId)
+          if status == "processing" then
+            stalledCount = stalledCount + 1
+            attempts = attempts + 1
+            redis.call("HSET", jobKey, "stalledCount", stalledCount, "attempts", attempts)
 
-          -- 判断是否应该失败
-          local shouldFail = false
-          local failReason = ""
+            -- 从活跃列表移除
+            local groupActiveKey = ns .. ":g:" .. groupId .. ":active"
+            redis.call("LREM", groupActiveKey, 1, jobId)
 
-          if stalledCount >= maxStalledCount and maxStalledCount > 0 then
-            shouldFail = true
-            failReason = "Job stalled " .. stalledCount .. " times (max: " .. maxStalledCount .. ")"
-          elseif attempts > maxAttempts then
-            shouldFail = true
-            failReason = "Job exceeded max attempts (" .. attempts .. "/" .. maxAttempts .. ") due to stalls"
-          end
+            -- 判断是否应该失败
+            local shouldFail = false
+            local failReason = ""
 
-          if shouldFail then
-            -- 失败处理
-            redis.call("ZREM", processingKey, jobId)
-            local groupKey = ns .. ":g:" .. groupId
-            redis.call("ZREM", groupKey, jobId)
-            redis.call("DEL", ns .. ":processing:" .. jobId)
-            -- [BullMQ 风格] 强制释放锁（无需 token，因为锁已过期）
-            releaseLock({ ns = ns, jobId = jobId })
-            redis.call("HSET", jobKey, "status", "failed", "finishedOn", now, "failedReason", failReason)
-            
-            -- [FIX] 如果是子任务，通知父任务流
-            if parentId then
-              updateParentFlow({
-                ns = ns,
-                parentId = parentId,
-                childId = jobId,
-                status = "failed",
-                resultOrError = cjson.encode({ message = failReason, name = "StalledError" }),
-                timestamp = now,
-                readyKey = readyKey,
-                limitedKey = limitedKey
-              })
+            if stalledCount >= maxStalledCount and maxStalledCount > 0 then
+              shouldFail = true
+              failReason = "Job stalled " .. stalledCount .. " times (max: " .. maxStalledCount .. ")"
+            elseif attempts > maxAttempts then
+              shouldFail = true
+              failReason = "Job exceeded max attempts (" .. attempts .. "/" .. maxAttempts .. ") due to stalls"
             end
-            
-            redis.call("ZADD", ns .. ":failed", now, jobId)
-            table.insert(results, jobId)
-            table.insert(results, groupId)
-            table.insert(results, "failed")
-          else
-            -- 恢复处理
-            local stillInProcessing = redis.call("ZSCORE", processingKey, jobId)
-            if stillInProcessing then
+
+            if shouldFail then
+              -- 失败处理
               redis.call("ZREM", processingKey, jobId)
+              local groupKey = ns .. ":g:" .. groupId
+              redis.call("ZREM", groupKey, jobId)
               redis.call("DEL", ns .. ":processing:" .. jobId)
               -- [BullMQ 风格] 强制释放锁（无需 token，因为锁已过期）
               releaseLock({ ns = ns, jobId = jobId })
+              redis.call("HSET", jobKey, "status", "failed", "finishedOn", now, "failedReason", failReason)
+              
+              -- [FIX] 如果是子任务，通知父任务流
+              if parentId then
+                updateParentFlow({
+                  ns = ns,
+                  parentId = parentId,
+                  childId = jobId,
+                  status = "failed",
+                  resultOrError = cjson.encode({ message = failReason, name = "StalledError" }),
+                  timestamp = now,
+                  readyKey = readyKey,
+                  limitedKey = limitedKey
+                })
+              end
+              
+              redis.call("ZADD", ns .. ":failed", now, jobId)
+              table.insert(results, jobId)
+              table.insert(results, groupId)
+              table.insert(results, "failed")
+            else
+              -- 恢复处理
+              local stillInProcessing = redis.call("ZSCORE", processingKey, jobId)
+              if stillInProcessing then
+                redis.call("ZREM", processingKey, jobId)
+                redis.call("DEL", ns .. ":processing:" .. jobId)
+                -- [BullMQ 风格] 强制释放锁（无需 token，因为锁已过期）
+                releaseLock({ ns = ns, jobId = jobId })
 
-              local groupKey = ns .. ":g:" .. groupId
+                local groupKey = ns .. ":g:" .. groupId
 
-              if delayUntil > 0 and delayUntil > now then
-                -- 任务仍在延迟中，只加入延迟集合
-                redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
-                redis.call("HSET", jobKey, "status", "delayed")
+                if delayUntil > 0 and delayUntil > now then
+                  -- 任务仍在延迟中，只加入延迟集合
+                  redis.call("ZADD", ns .. ":delayed", delayUntil, jobId)
+                  redis.call("HSET", jobKey, "status", "delayed")
 
-                -- 更新群组状态
-                local head = redis.call("ZRANGE", groupKey, 0, 0, "WITHSCORES")
-                if head and #head >= 2 then
-                  local headScore = tonumber(head[2])
-                  if redis.call("ZSCORE", readyKey, groupId) then
-                    redis.call("ZADD", readyKey, headScore, groupId)
-                  elseif redis.call("ZSCORE", limitedKey, groupId) then
-                    redis.call("ZADD", limitedKey, headScore, groupId)
+                  -- 更新群组状态
+                  local head = redis.call("ZRANGE", groupKey, 0, 0, "WITHSCORES")
+                  if head and #head >= 2 then
+                    local headScore = tonumber(head[2])
+                    if redis.call("ZSCORE", readyKey, groupId) then
+                      redis.call("ZADD", readyKey, headScore, groupId)
+                    elseif redis.call("ZSCORE", limitedKey, groupId) then
+                      redis.call("ZADD", limitedKey, headScore, groupId)
+                    end
                   end
-                end
-                table.insert(results, jobId)
-                table.insert(results, groupId)
-                table.insert(results, "delayed")
-              elseif score then
-                -- 恢复到等待状态
-                redis.call("ZADD", groupKey, score, jobId)
-                redis.call("HSET", jobKey, "status", "waiting")
+                  table.insert(results, jobId)
+                  table.insert(results, groupId)
+                  table.insert(results, "delayed")
+                elseif score then
+                  -- 恢复到等待状态
+                  redis.call("ZADD", groupKey, score, jobId)
+                  redis.call("HSET", jobKey, "status", "waiting")
 
-                -- 检查群组容量，决定是否进入ready或limited
-                -- Module will internally fetch headScore if needed
-                updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
-                redis.call("SADD", groupsKey, groupId)
-                table.insert(results, jobId)
-                table.insert(results, groupId)
-                table.insert(results, "recovered")
+                  -- 检查群组容量，决定是否进入ready或limited
+                  -- Module will internally fetch headScore if needed
+                  updateGroupReadyLimitedState({ ns = ns, groupId = groupId, readyKey = readyKey, limitedKey = limitedKey })
+                  redis.call("SADD", groupsKey, groupId)
+                  table.insert(results, jobId)
+                  table.insert(results, groupId)
+                  table.insert(results, "recovered")
+                end
               end
             end
           end
