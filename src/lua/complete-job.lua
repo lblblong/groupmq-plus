@@ -65,7 +65,8 @@ if jobStatus ~= "processing" or not stillInProcessing then
 end
 
 -- 令牌验证
-if not verifyToken({ ns = ns, jobId = jobId, token = token }) then
+local tokenStatus = verifyToken({ ns = ns, jobId = jobId, token = token })
+if tokenStatus ~= 1 then
   return 0
 end
 

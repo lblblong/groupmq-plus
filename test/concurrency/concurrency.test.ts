@@ -79,6 +79,37 @@ describe('Concurrency and Race Condition Tests', () => {
     expect(heavyJobsByWorker.length).toBe(10);
   });
 
+  test('concurrency=1 时同组原子链式预留应连续处理所有任务', async ({
+    createQueue,
+    createWorker,
+  }) => {
+    const queue = createQueue();
+    const groupId = 'chain-group';
+    const jobCount = 8;
+
+    for (let i = 0; i < jobCount; i++) {
+      await queue.add({
+        groupId,
+        data: { seq: i },
+        groupConfig: { concurrency: 1 },
+      });
+    }
+
+    const processed: number[] = [];
+    const worker = createWorker({
+      queue,
+      concurrency: 1,
+      handler: async (job) => {
+        processed.push((job.data as { seq: number }).seq);
+      },
+    });
+    worker.run();
+
+    await queue.waitForEmpty();
+
+    expect(processed).toEqual(Array.from({ length: jobCount }, (_, i) => i));
+  });
+
   test('should handle concurrent add and dequeue operations', async ({ createQueue, createWorker }) => {
     const q = createQueue();
 

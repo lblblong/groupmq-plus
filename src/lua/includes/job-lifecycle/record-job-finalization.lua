@@ -1,3 +1,5 @@
+--- @include "includes/job-lifecycle/delete-job-retention-storage"
+
 --[[
   记录任务完成/失败状态 (Record Job Finalization)
   
@@ -65,13 +67,13 @@ local function recordJobFinalization(options)
     if toRemove > 0 then
       local oldIds = redis.call("ZRANGE", statusKey, 0, toRemove - 1)
       for _, oldId in ipairs(oldIds) do
-        redis.call("DEL", ns .. ":job:" .. oldId)
+        deleteJobRetentionStorage({ ns = ns, jobId = oldId })
       end
       redis.call("ZREMRANGEBYRANK", statusKey, 0, toRemove - 1)
     end
   else
     -- keepCount == 0: 立即删除
-    redis.call("DEL", jobKey)
+    deleteJobRetentionStorage({ ns = ns, jobId = jobId })
   end
 
   -- 发布事件

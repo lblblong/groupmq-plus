@@ -266,7 +266,11 @@ end
 
 - **recordJobFinalization** (`job-lifecycle/record-job-finalization.lua`)
   - 记录任务最终化信息
-  - 被调用于：complete-job.lua
+  - 被调用于：complete-job.lua, complete-and-reserve-next-with-metadata.lua
+
+- **deleteJobRetentionStorage** (`job-lifecycle/delete-job-retention-storage.lua`)
+  - 删除任务 job hash、unique key 及 flow 跟踪 key
+  - 被调用于：record-job-finalization.lua, clean-status.lua
 
 - **deleteJobCompletely** (`job-lifecycle/delete-job-completely.lua`)
   - 完全删除任务

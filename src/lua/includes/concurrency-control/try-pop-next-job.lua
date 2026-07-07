@@ -54,15 +54,17 @@ local function tryPopNextJob(options)
   if shouldCleanupGhosts then
     local ghostCount = detectGhostTasks({ ns = ns, groupId = groupId, processingKey = processingKey })
     if ghostCount > 0 then
-      -- 移除所有幽灵任务
+      -- 移除幽灵任务，但保留 chaining 豁免任务（它已离开 processing 但仍需在 active 中占位）
       local activeJobs = redis.call("LRANGE", groupActiveKey, 0, -1)
       for _, jobId in ipairs(activeJobs) do
-        local score = redis.call("ZSCORE", processingKey, jobId)
-        if not score then
-          redis.call("LREM", groupActiveKey, 0, jobId)
+        if jobId ~= allowedJobId then
+          local score = redis.call("ZSCORE", processingKey, jobId)
+          if not score then
+            redis.call("LREM", groupActiveKey, 0, jobId)
+          end
         end
       end
-      activeCount = math.max(0, activeCount - ghostCount)
+      activeCount = redis.call("LLEN", groupActiveKey)
     end
   end
 

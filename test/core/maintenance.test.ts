@@ -1,4 +1,4 @@
-import { describe, expect, test } from '../helpers/suite';
+import { describe, expect, test, waitUntil } from '../helpers/suite';
 
 describe('队列清理功能 (Queue.clean)', () => {
   test('应清理超过宽限期的已完成任务', async ({ createQueue, createWorker }) => {
@@ -73,5 +73,55 @@ describe('队列清理功能 (Queue.clean)', () => {
 
     const afterDelayed = await queue.getDelayedCount();
     expect(afterDelayed).toBe(0);
+  });
+
+  test('清理已完成任务后同组 waiting 任务仍应保留在 ready 队列', async ({
+    redis,
+    namespace,
+    createQueue,
+    createWorker,
+  }) => {
+    const queue = createQueue({ keepCompleted: 100 });
+    const groupId = 'g-clean-ready';
+
+    const worker = createWorker({
+      queue,
+      handler: async () => 'ok',
+    });
+    worker.run();
+
+    const completedJob = await queue.add({
+      groupId,
+      data: { n: 1 },
+      groupConfig: { concurrency: 1 },
+    });
+    await waitUntil(async () => (await queue.getJob(completedJob.id))!.status === 'completed');
+
+    await worker.close();
+
+    const waitingJob = await queue.add({
+      groupId,
+      data: { n: 2 },
+      groupConfig: { concurrency: 1 },
+    });
+    expect((await queue.getJob(waitingJob.id))!.status).toBe('waiting');
+
+    const readyKey = `groupmq:${namespace}:ready`;
+    expect(await redis.zscore(readyKey, groupId)).not.toBeNull();
+
+    const cleaned = await queue.clean(0, Number.MAX_SAFE_INTEGER, 'completed');
+    expect(cleaned).toBeGreaterThanOrEqual(1);
+
+    expect(await redis.zscore(readyKey, groupId)).not.toBeNull();
+    expect(await redis.zcard(`groupmq:${namespace}:g:${groupId}`)).toBe(1);
+
+    const recoveryWorker = createWorker({
+      queue,
+      handler: async (job) => `ok-${job.data.n}`,
+    });
+    recoveryWorker.run();
+
+    await waitUntil(async () => (await queue.getJob(waitingJob.id))!.status === 'completed');
+    expect((await queue.getJob(waitingJob.id))!.returnvalue).toBe('ok-2');
   });
 });

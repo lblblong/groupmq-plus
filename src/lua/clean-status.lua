@@ -1,5 +1,6 @@
 --- @include "includes/flow/remove-child-from-parent"
---- @include "includes/group-lifecycle/cleanup-if-group-empty"
+--- @include "includes/group-lifecycle/refresh-group-state"
+--- @include "includes/job-lifecycle/delete-job-retention-storage"
 
 -- argv: ns, status, graceAtMs, limit
 local ns = KEYS[1]
@@ -48,20 +49,17 @@ for i = 1, #ids do
       redis.call("HINCRBY", groupMetaKey, "count", -1)
     end
 
-    -- Use cleanup helper to handle group cleanup and ready/limited updates
-    cleanupIfGroupEmpty({
+    -- 刷新群组状态：空组清理，非空组重新入 ready/limited
+    refreshGroupState({
       ns = ns,
-      groupId = groupId
+      groupId = groupId,
+      readyKey = readyKey,
+      limitedKey = limitedKey
     })
   end
 
-  -- Delete job hash, idempotence key, flow results and children tracking (variadic DEL optimization)
-  redis.call('DEL',
-    jobKey,
-    ns .. ':unique:' .. id,
-    ns .. ':flow:results:' .. id,
-    ns .. ':flow:children:' .. id
-  )
+  -- 删除任务存储及 flow 跟踪数据
+  deleteJobRetentionStorage({ ns = ns, jobId = id })
 
   -- If this job is a child, remove it from parent's children set using the dedicated module
   if parentId then

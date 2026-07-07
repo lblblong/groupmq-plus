@@ -24,8 +24,7 @@ Options:
 
 function parseArgs(args: string[]) {
   const patterns: string[] = [];
-  // let redisUrl = process.env.REDIS_URL ?? process.env.REDIS_URI ?? "redis://localhost:6379";
-  let redisUrl = "redis://default@192.168.0.8:6380/0";
+  let redisUrl = process.env.REDIS_URL ?? process.env.REDIS_URI ?? "redis://localhost:6379";
   let outFile: string | undefined;
   let scanCount = DEFAULT_SCAN_COUNT;
 

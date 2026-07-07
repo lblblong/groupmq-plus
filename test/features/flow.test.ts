@@ -385,6 +385,148 @@ describe('Flow API (任务流方法)', () => {
       expect(members).toEqual([child2Id]);
     });
   });
+
+  describe('保留策略修剪时的清理', () => {
+    test('修剪父任务记录时应删除 flow:children 和 flow:results', async ({
+      redis,
+      namespace,
+      createQueue,
+      createWorker,
+    }) => {
+      const queue = createQueue({
+        keepCompleted: 1,
+      });
+
+      const worker = createWorker({
+        queue,
+        handler: async (job) => `ok-${job.id}`,
+      });
+      worker.run();
+
+      const parentIds = ['parent-trim-0', 'parent-trim-1', 'parent-trim-2'];
+
+      for (const parentId of parentIds) {
+        await queue.addFlow({
+          parent: {
+            jobId: parentId,
+            groupId: 'g-parent',
+            data: { name: parentId },
+          },
+          children: [
+            {
+              jobId: `${parentId}-child`,
+              groupId: 'g-child',
+              data: { name: 'child' },
+            },
+          ],
+        });
+        await queue.waitForEmpty();
+      }
+
+      const trimmedParent = parentIds[0];
+      const childrenKey = `groupmq:${namespace}:flow:children:${trimmedParent}`;
+      const resultsKey = `groupmq:${namespace}:flow:results:${trimmedParent}`;
+      const jobKey = `groupmq:${namespace}:job:${trimmedParent}`;
+
+      expect(await redis.exists(childrenKey)).toBe(0);
+      expect(await redis.exists(resultsKey)).toBe(0);
+      expect(await redis.exists(jobKey)).toBe(0);
+
+      const latestParent = parentIds[2];
+      expect(await redis.exists(`groupmq:${namespace}:job:${latestParent}`)).toBe(1);
+    });
+
+    test('修剪失败父任务记录时应删除 flow 跟踪 key', async ({
+      redis,
+      namespace,
+      createQueue,
+      createWorker,
+    }) => {
+      const queue = createQueue({
+        keepFailed: 1,
+        maxAttempts: 1,
+      });
+
+      const worker = createWorker({
+        queue,
+        handler: async () => {
+          throw new Error('intentional failure');
+        },
+      });
+      worker.run();
+
+      const parentIds = ['parent-fail-0', 'parent-fail-1', 'parent-fail-2'];
+
+      for (const parentId of parentIds) {
+        await queue.addFlow({
+          parent: {
+            jobId: parentId,
+            groupId: 'g-parent',
+            data: { name: parentId },
+          },
+          children: [
+            {
+              jobId: `${parentId}-child`,
+              groupId: 'g-child',
+              data: { name: 'child' },
+            },
+          ],
+        });
+        await queue.waitForEmpty();
+      }
+
+      const trimmedParent = parentIds[0];
+      expect(
+        await redis.exists(`groupmq:${namespace}:flow:children:${trimmedParent}`),
+      ).toBe(0);
+      expect(
+        await redis.exists(`groupmq:${namespace}:flow:results:${trimmedParent}`),
+      ).toBe(0);
+      expect(await redis.exists(`groupmq:${namespace}:job:${trimmedParent}`)).toBe(0);
+    });
+
+    test('keepCompleted 为 0 时完成父任务后应立即删除 flow 跟踪 key', async ({
+      redis,
+      namespace,
+      createQueue,
+      createWorker,
+    }) => {
+      const queue = createQueue({
+        keepCompleted: 0,
+      });
+
+      const worker = createWorker({
+        queue,
+        handler: async (job) => `ok-${job.id}`,
+      });
+      worker.run();
+
+      const parentId = 'parent-immediate-delete';
+      await queue.addFlow({
+        parent: {
+          jobId: parentId,
+          groupId: 'g-parent',
+          data: { name: parentId },
+        },
+        children: [
+          {
+            jobId: `${parentId}-child`,
+            groupId: 'g-child',
+            data: { name: 'child' },
+          },
+        ],
+      });
+      await queue.waitForEmpty();
+
+      expect(
+        await redis.exists(`groupmq:${namespace}:flow:children:${parentId}`),
+      ).toBe(0);
+      expect(
+        await redis.exists(`groupmq:${namespace}:flow:results:${parentId}`),
+      ).toBe(0);
+      expect(await redis.exists(`groupmq:${namespace}:job:${parentId}`)).toBe(0);
+    });
+  });
 });
 
 describe('Flow 执行 (父子任务流)', () => {

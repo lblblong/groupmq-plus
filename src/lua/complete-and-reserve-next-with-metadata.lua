@@ -5,6 +5,7 @@
 --- @include "includes/group-lifecycle/refresh-group-state"
 --- @include "includes/concurrency-control/try-pop-next-job"
 --- @include "includes/lock/release-lock"
+--- @include "includes/job-lifecycle/record-job-finalization"
 
 -- Complete a job with metadata and atomically reserve the next job from the same group
 -- argv: ns, completedJobId, groupId, status, timestamp, resultOrError, keepCompleted, keepFailed,
@@ -43,7 +44,8 @@ if jobStatus ~= "processing" or not stillInProcessing then
 end
 
 -- Token verification (moved to dedicated module)
-if not verifyToken({ ns = ns, jobId = completedJobId, token = currentJobToken }) then
+local tokenStatus = verifyToken({ ns = ns, jobId = completedJobId, token = currentJobToken })
+if tokenStatus ~= 1 then
   return nil
 end
 
@@ -61,94 +63,31 @@ redis.call("ZREM", processingKey, completedJobId)
 releaseLock({ ns = ns, jobId = completedJobId, token = currentJobToken })
 
 -- Part 3: Record job metadata (completed or failed)
-
-if status == "completed" then
-  local completedKey = ns .. ":completed"
-
-  -- CRITICAL: Always set final status first, even if job will be deleted
-  -- This ensures any concurrent reads see "completed", not "completing"
-  redis.call("HSET", jobKey, "status", "completed")
-
-  -- Update parent flow if this is a child task (moved to dedicated module)
-  if parentId then
-    updateParentFlow({
-      ns = ns,
-      parentId = parentId,
-      childId = completedJobId,
-      status = status,
-      resultOrError = resultOrError,
-      timestamp = timestamp,
-      readyKey = readyKey,
-      limitedKey = limitedKey
-    })
-  end
-  
-  if keepCompleted > 0 then
-    -- Store full job metadata and add to completed set
-    redis.call("HSET", jobKey, 
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts,
-      "returnvalue", resultOrError
-    )
-    redis.call("ZADD", completedKey, timestamp, completedJobId)
-    
-    -- Trim old entries atomically
-    local zcount = redis.call("ZCARD", completedKey)
-    local toRemove = zcount - keepCompleted
-    if toRemove > 0 then
-      local oldIds = redis.call("ZRANGE", completedKey, 0, toRemove - 1)
-      if #oldIds > 0 then
-        redis.call("ZREMRANGEBYRANK", completedKey, 0, toRemove - 1)
-        for i = 1, #oldIds do
-          local oldId = oldIds[i]
-          redis.call("DEL", ns .. ":job:" .. oldId)
-          redis.call("DEL", ns .. ":unique:" .. oldId)
-          redis.call("DEL", ns .. ":flow:results:" .. oldId)
-        end
-      end
-    end
-  else
-    -- keepCompleted == 0: Delete immediately (status already set above)
-    redis.call("DEL", jobKey)
-    redis.call("DEL", ns .. ":unique:" .. completedJobId)
-    redis.call("DEL", ns .. ":flow:results:" .. completedJobId)
-  end
-  
-elseif status == "failed" then
-  local failedKey = ns .. ":failed"
-  local errorInfo = cjson.decode(resultOrError)
-  
-  -- CRITICAL: Always set final status first, even if job will be deleted
-  redis.call("HSET", jobKey, "status", "failed")
-  
-  if keepFailed > 0 then
-    redis.call("HSET", jobKey,
-      "failedReason", errorInfo.message or "Error",
-      "failedName", errorInfo.name or "Error",
-      "stacktrace", errorInfo.stack or "",
-      "processedOn", processedOn,
-      "finishedOn", finishedOn,
-      "attempts", attempts,
-      "maxAttempts", maxAttempts
-    )
-    redis.call("ZADD", failedKey, timestamp, completedJobId)
-  else
-    -- Delete job (status already set above)
-    redis.call("DEL", jobKey)
-    redis.call("DEL", ns .. ":unique:" .. completedJobId)
-    redis.call("DEL", ns .. ":flow:results:" .. completedJobId)
-  end
+if parentId then
+  updateParentFlow({
+    ns = ns,
+    parentId = parentId,
+    childId = completedJobId,
+    status = status,
+    resultOrError = resultOrError,
+    timestamp = timestamp,
+    readyKey = readyKey,
+    limitedKey = limitedKey
+  })
 end
 
--- Publish completion/failure event for waiters
-local eventPayload = cjson.encode({
-  id = completedJobId,
+local keepCount = (status == "completed") and keepCompleted or keepFailed
+recordJobFinalization({
+  ns = ns,
+  jobId = completedJobId,
   status = status,
-  result = resultOrError
+  resultOrError = resultOrError,
+  finishedOn = finishedOn,
+  keepCount = keepCount,
+  processedOn = processedOn,
+  attempts = attempts,
+  maxAttempts = maxAttempts
 })
-redis.call("PUBLISH", ns .. ":events", eventPayload)
 
 -- Part 4: Handle group active list and reserve next job using unified module
 local groupActiveKey = ns .. ":g:" .. gid .. ":active"
