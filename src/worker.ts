@@ -1019,7 +1019,22 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
             this.logger.warn(
               `Failed stalled job ${jobId} from group ${groupId} (exceeded max stalled count)`
             )
+            // 保留 stalled 便于监控；同时 emit failed，与普通终态失败契约一致
             this.emit('stalled', jobId, groupId)
+            try {
+              const job = await this.q.getJob(jobId)
+              const err = new Error(job.failedReason || 'Job stalled')
+              if (job.stacktrace) {
+                err.stack = job.stacktrace
+              }
+              this.emit('failed', job)
+              this.emit('error', err)
+            } catch (loadErr) {
+              this.logger.error(
+                `Failed to emit failed event for stalled job ${jobId}:`,
+                loadErr
+              )
+            }
           }
         }
       }

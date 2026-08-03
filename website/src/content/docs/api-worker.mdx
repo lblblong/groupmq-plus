@@ -100,7 +100,8 @@ await worker.run()
 - `closed`
 - `ioredis:close`
 - `graceful-timeout` - `(job)`
-- `stalled` - `(jobId, groupId)` - emitted when a stalled job is detected
+- `stalled` - `(jobId, groupId)` - emitted when a stalled job is recovered or failed due to max stalled count
+- When a stalled job exceeds `maxStalledCount`, the worker also emits `failed` (and `error`) with the job in final failed status — same contract as a normal final failure
 
 ```ts
 worker.on('ready', () => console.log('worker ready'))

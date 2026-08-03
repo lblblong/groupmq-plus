@@ -30,7 +30,8 @@ const worker = new Worker({
 
 ## Monitoring
 
-Listen to the `stalled` event to monitor and alert on stalled jobs:
+Listen to the `stalled` event to monitor and alert on stalled jobs.
+When a job exceeds `maxStalledCount`, the worker also emits `failed` (final status) so business handlers receive the same contract as a normal final failure:
 
 ```ts
 worker.on('stalled', (jobId, groupId) => {
@@ -38,8 +39,13 @@ worker.on('stalled', (jobId, groupId) => {
   
   // Alert your monitoring system
   metrics.increment('jobs.stalled', { groupId })
-  
-  // Note: Job has already been recovered automatically
+})
+
+worker.on('failed', (job) => {
+  // Includes stalled jobs that exceeded maxStalledCount
+  if (job.isFailed()) {
+    // final failure cleanup / alerting
+  }
 })
 ```
 
