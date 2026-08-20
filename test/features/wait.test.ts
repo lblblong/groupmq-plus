@@ -53,4 +53,25 @@ describe('等待直到完成功能 (waitUntilFinished)', () => {
     expect(result1).toBe('ok');
     expect(result2).toBe('ok');
   });
+
+  // 竞态复现：keepCompleted=0 且 worker 在 waitUntilFinished 调用前已完成，pubsub 事件必然丢失
+  test('keepCompleted=0 时 job 在订阅建立前完成应当正确解决而非永久挂死', async ({ createQueue, createWorker }) => {
+    const q = createQueue({ keepCompleted: 0 });
+
+    const worker = createWorker({
+      queue: q,
+      handler: async () => 'done',
+    });
+    worker.run();
+
+    const job = await q.add({ groupId: 'g1', data: {} });
+
+    // 等待 job 实际跑完，确保 worker 已 PUBLISH 完成事件且 job hash 已被删
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // 修复后应立即 reject 并给出明确错误，而非挂死到超时
+    await expect(job.waitUntilFinished(3000)).rejects.toThrow(
+      'finished but result was not retained'
+    );
+  });
 });

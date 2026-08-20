@@ -2246,16 +2246,23 @@ export class Queue<T = any> {
    * Wait for a job to complete or fail, similar to BullMQ's waitUntilFinished.
    */
   async waitUntilFinished(jobId: string, timeoutMs = 0): Promise<unknown> {
-    const job = await this.getJob(jobId)
+    // Fast path: check terminal state before subscribing
+    let job: JobEntity<T>
+    try {
+      job = await this.getJob(jobId)
+    } catch {
+      // Job hash is gone before we even start waiting — already finished with keepCompleted=0.
+      throw new Error(
+        `Job ${jobId} finished but result was not retained (keepCompleted=0)`
+      )
+    }
+
     const state = await job.getState()
+    if (state === 'completed') return job.returnvalue
+    if (state === 'failed') throw new Error(job.failedReason || 'Job failed')
 
-    if (state === 'completed') {
-      return job.returnvalue
-    }
-    if (state === 'failed') {
-      throw new Error(job.failedReason || 'Job failed')
-    }
-
+    // Subscribe before registering the waiter to eliminate the race window
+    // where a pubsub PUBLISH fires between subscribing and hanging the waiter.
     await this.setupSubscriber()
 
     return new Promise((resolve, reject) => {
@@ -2295,6 +2302,8 @@ export class Queue<T = any> {
         }, timeoutMs)
       }
 
+      // Re-read state after the waiter is registered to catch completions that
+      // happened between the fast-path check and the pubsub subscription.
       void (async () => {
         try {
           const latest = await this.getJob(jobId)
@@ -2304,8 +2313,16 @@ export class Queue<T = any> {
           } else if (latestState === 'failed') {
             wrappedReject(new Error(latest.failedReason ?? 'Job failed'))
           }
-        } catch (_err) {
-          // Job might have been cleaned up; rely on pub/sub event
+        } catch {
+          // Job hash is gone: keepCompleted=0 deleted it after completion.
+          // The pubsub event was already published before deletion, but since
+          // we subscribed after that point we will never receive it.
+          // Treat a missing job as "finished but result not retained".
+          wrappedReject(
+            new Error(
+              `Job ${jobId} finished but result was not retained (keepCompleted=0)`
+            )
+          )
         }
       })()
     })
