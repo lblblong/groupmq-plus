@@ -1,6 +1,6 @@
 {
   "name": "groupmq-plus",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "Per-group FIFO queue on Redis with visibility timeouts and retries.",
   "license": "MIT",
   "private": false,
