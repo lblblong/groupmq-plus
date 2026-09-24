@@ -20,6 +20,8 @@ export class Job<T = any> {
   public readonly parentId?: string
   public readonly isFlowParent: boolean
   public readonly token?: string // [NEW] Internal usage for fencing
+  /** 本次 reservation 的 maxAttempts 回写；Worker 失败判断与 handler 看到同一份 */
+  private syncReservationMaxAttempts?: (maxAttempts: number) => void
 
   constructor(args: {
     queue: Queue<T>
@@ -98,6 +100,21 @@ export class Job<T = any> {
    */
   changeDelay(newDelay: number): Promise<boolean> {
     return this.queue.changeDelay(this.id, newDelay)
+  }
+
+  /**
+   * Update this job's max retry budget (Redis hash + in-memory opts.attempts).
+   * When this Job was built from a live reservation, that reservation's maxAttempts
+   * is updated too, so the worker's exhaustion check sees the same value.
+   */
+  async changeMaxAttempts(maxAttempts: number): Promise<boolean> {
+    const ok = await this.queue.changeMaxAttempts(this.id, maxAttempts)
+    if (ok) {
+      const next = Math.floor(maxAttempts)
+      ;(this.opts as { attempts: number }).attempts = next
+      this.syncReservationMaxAttempts?.(next)
+    }
+    return ok
   }
 
   /**
@@ -313,7 +330,7 @@ export class Job<T = any> {
       delayMs?: number
     }
   ): Job<T> {
-    return new Job<T>({
+    const job = new Job<T>({
       queue,
       id: reserved.id,
       name: 'groupmq',
@@ -336,6 +353,10 @@ export class Job<T = any> {
       isFlowParent: reserved.isFlowParent,
       token: reserved.token, // [NEW] Pass token from reserved job
     })
+    job.syncReservationMaxAttempts = (next) => {
+      reserved.maxAttempts = next
+    }
+    return job
   }
 
   /**

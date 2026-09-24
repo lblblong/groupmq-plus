@@ -3177,6 +3177,23 @@ export class Queue<T = any> {
   }
 
   /**
+   * Raise or lower the per-job retry budget while the job hash still exists.
+   * Used by long-running handlers that discover they need more attempts mid-flight.
+   */
+  async changeMaxAttempts(jobId: string, maxAttempts: number): Promise<boolean> {
+    if (!Number.isFinite(maxAttempts) || maxAttempts < 1) {
+      throw new Error(`maxAttempts must be a positive number, got ${maxAttempts}`)
+    }
+    const jobKey = `${this.ns}:job:${jobId}`
+    const exists = await this.r.exists(jobKey)
+    if (!exists) {
+      return false
+    }
+    await this.r.hset(jobKey, 'maxAttempts', String(Math.floor(maxAttempts)))
+    return true
+  }
+
+  /**
    * Add a repeating job (cron job)
    */
   private async addRepeatingJob(opts: AddOptions<T>): Promise<JobEntity> {

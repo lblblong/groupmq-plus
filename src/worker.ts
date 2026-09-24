@@ -1416,7 +1416,7 @@ class _Worker<T = any> extends TypedEventEmitter<WorkerEvents<T>> {
 
     // 1. Determine if this is unrecoverable or retries are exhausted
     const isUnrecoverable = err instanceof UnrecoverableError
-    const isRetriesExhausted = nextAttempt >= this.maxAttempts
+    const isRetriesExhausted = nextAttempt >= job.maxAttempts
 
     let finalStatus: 'failed' | 'delayed' | 'waiting' = 'failed'
     let delayMs: number | undefined = undefined
